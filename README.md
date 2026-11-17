@@ -37,6 +37,17 @@ Load it in Chrome: `chrome://extensions` → enable **Developer mode** → **Loa
 | `npm test` | unit tests (Vitest) |
 | `npm run test:e2e` | builds `dist-e2e/` and runs the Playwright suite against real Chrome |
 
+## Sharing the extension with other people
+
+```bash
+npm run package        # builds and writes release/snapflow-<version>.zip
+```
+
+Send that zip. The recipient: unzip it to a folder they will keep → open `chrome://extensions` → turn on **Developer mode** →
+**Load unpacked** → select the unzipped folder (the one containing `manifest.json`). To update, replace the folder's contents and
+press the reload icon on the extension card. The same zip is what you upload to the Chrome Web Store for public/unlisted distribution
+(Chrome does not allow installing a self-made `.crx` outside the Store).
+
 ## Tests
 
 * **Unit (Vitest, 90 tests)** – pixel-ratio maths, crop boundaries, scroll positions, stitching/overlap/last-frame cropping,
