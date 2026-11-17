@@ -1,0 +1,6 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Lazy-loaded images</title>
+<style>html,body{margin:0}img{display:block;width:100%;height:300px;background:#fff}</style></head>
+<body><script>
+const n = +(new URLSearchParams(location.search).get('n') ?? 12);
+for (let i = 0; i < n; i++) { const im = document.createElement('img'); im.loading = 'lazy'; im.src = '/img/' + i + '.svg?delay=200'; document.body.appendChild(im); }
+</script></body></html>

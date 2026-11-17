@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+dist-e2e/
+*.zip
+
+# test output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+tests/.tmp/
+
+# logs / OS / editor
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.env
+.env.*
+
+# local Claude Code state
+.claude/

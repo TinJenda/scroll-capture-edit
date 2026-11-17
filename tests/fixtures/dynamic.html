@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Dynamic height</title>
+<style>html,body{margin:0}</style></head>
+<body><div id="root"></div>
+<script src="/_bands.js"></script>
+<script>
+const root = document.getElementById('root');
+makeBands(root, 12, 200);
+let grown = false;
+addEventListener('scroll', () => {
+  if (!grown && scrollY > 900) {
+    grown = true;
+    setTimeout(() => { const extra = document.createElement('div'); root.appendChild(extra);
+      for (let i = 12; i < 22; i++) { const d = document.createElement('div'); d.style.cssText = `height:200px;background:${bandCss(i)}`; extra.appendChild(d); } }, 50);
+  }
+});
+</script></body></html>
