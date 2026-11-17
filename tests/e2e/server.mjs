@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../fixtures');
 const PORT = 4173;
 
-export const bandColor = (i) => [(i * 6) % 256, (255 - i * 6 + 256) % 256, (i * 37) % 256];
+export const bandColor = (i) => [(i * 6) % 256, (((255 - i * 6) % 256) + 256) % 256, (i * 37) % 256];
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);

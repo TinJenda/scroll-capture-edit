@@ -33,6 +33,24 @@ export interface AreaSelectorCallbacks {
   onCancel(): void;
 }
 
+/** Customisation points so other capture modes (e.g. scrolling area) can reuse the selection overlay. */
+export interface AreaSelectorOptions {
+  hint?: string;
+  confirmLabel?: string;
+  /** Extra CSS for UI added through `mount`. */
+  css?: string;
+  /** Add extra UI (panels, highlights) to the overlay's shadow root. */
+  mount?(root: ShadowRoot): void;
+  /** Called when the selection settles (drag end, nudge) or is cleared. */
+  onSelectionChange?(rect: Rect | null): void;
+  /** True while a pointer drag (new selection, move or resize) is in progress. */
+  onDragState?(dragging: boolean): void;
+  /** null = capture may start; a string = why it cannot (the Capture button is disabled). */
+  canConfirm?(): string | null;
+  /** Return true if the key was handled (and must not reach the page). */
+  onKey?(e: KeyboardEvent): boolean;
+}
+
 /**
  * Lightshot-style region selector: drag to select, then move/resize the selection,
  * confirm with Enter / the Capture button, cancel with Esc. All UI lives in a closed
@@ -45,22 +63,27 @@ export class AreaSelector {
   private label: HTMLElement;
   private hint: HTMLElement;
   private bar: HTMLElement;
+  private captureBtn: HTMLButtonElement;
   private handleEls = new Map<Handle, HTMLElement>();
   private sel: Rect | null = null;
   private action: Action | null = null;
   private finished = false;
 
-  constructor(private readonly cb: AreaSelectorCallbacks) {
-    this.layer = createLayer(CSS);
+  constructor(
+    private readonly cb: AreaSelectorCallbacks,
+    private readonly opts: AreaSelectorOptions = {},
+  ) {
+    this.layer = createLayer(CSS + (opts.css ?? ''));
     this.stage = el('div', { className: 'stage', role: 'application', 'aria-label': 'Select an area to capture' });
     this.box = el('div', { className: 'box' });
     this.label = el('div', { className: 'label' });
-    this.hint = el('div', { className: 'hint', text: 'Drag to select an area  ·  Esc to cancel' });
+    this.hint = el('div', { className: 'hint', text: opts.hint ?? 'Drag to select an area  ·  Esc to cancel' });
 
     const capture = el('button', { type: 'button', className: 'primary', 'aria-label': 'Capture selection' });
     capture.innerHTML = ICONS.check;
-    capture.append(' Capture');
+    capture.append(` ${opts.confirmLabel ?? 'Capture'}`);
     capture.addEventListener('click', () => void this.confirm());
+    this.captureBtn = capture;
     const cancel = el('button', { type: 'button', 'aria-label': 'Cancel' });
     cancel.innerHTML = ICONS.x;
     cancel.append(' Cancel');
@@ -75,6 +98,7 @@ export class AreaSelector {
       root.append(node);
     }
     root.append(this.label, this.hint, this.bar);
+    opts.mount?.(root);
 
     this.stage.addEventListener('pointerdown', this.onPointerDown);
     this.stage.addEventListener('pointermove', this.onPointerMove);
@@ -133,6 +157,7 @@ export class AreaSelector {
       this.sel = { x: p.x, y: p.y, width: 0, height: 0 };
     }
     this.hint.style.display = 'none';
+    this.opts.onDragState?.(true);
     this.render();
   };
 
@@ -175,11 +200,13 @@ export class AreaSelector {
       /* already released */
     }
     this.action = null;
+    this.opts.onDragState?.(false);
     if (this.sel && (this.sel.width < MIN_SIZE || this.sel.height < MIN_SIZE)) {
       this.sel = null;
       this.hint.style.display = '';
     }
     this.render();
+    this.opts.onSelectionChange?.(this.sel);
   };
 
   private onDblClick = (e: MouseEvent) => {
@@ -188,6 +215,11 @@ export class AreaSelector {
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.finished) return;
+    if (e.key !== 'Escape' && e.key !== 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey && this.opts.onKey?.(e)) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -209,6 +241,7 @@ export class AreaSelector {
         y: clamp(this.sel.y + dy, 0, b.h - this.sel.height),
       };
       this.render();
+      this.opts.onSelectionChange?.(this.sel);
     }
   };
 
@@ -223,6 +256,8 @@ export class AreaSelector {
     this.box.style.display = has ? 'block' : 'none';
     this.label.style.display = has ? 'block' : 'none';
     this.bar.style.display = !this.action && big ? 'flex' : 'none';
+    this.captureBtn.disabled = this.opts.canConfirm?.() != null;
+    this.captureBtn.style.opacity = this.captureBtn.disabled ? '0.45' : '';
     for (const [h, node] of this.handleEls) {
       node.style.display = showHandles ? 'block' : 'none';
       if (r) {
@@ -257,6 +292,7 @@ export class AreaSelector {
   private async confirm(): Promise<void> {
     const r = this.sel;
     if (this.finished || !r || r.width < MIN_SIZE || r.height < MIN_SIZE) return;
+    if (this.opts.canConfirm?.() != null) return;
     this.finished = true;
     const rect = { x: r.x, y: r.y, width: r.width, height: r.height };
     // The overlay must be gone from the compositor *before* the screenshot is taken.
@@ -271,6 +307,16 @@ export class AreaSelector {
     this.finished = true;
     this.destroy();
     this.cb.onCancel();
+  }
+
+  /** The current selection (viewport CSS px), if any. */
+  get selection(): Rect | null {
+    return this.sel ? { ...this.sel } : null;
+  }
+
+  /** Re-evaluate button state after the host UI changed what is allowed. */
+  refresh(): void {
+    this.render();
   }
 
   destroy(): void {

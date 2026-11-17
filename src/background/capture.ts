@@ -5,9 +5,9 @@ import { classifyChromeError, SnapflowError, serializeError } from '@/shared/err
 import { cssRectToImageRect, resolveScale } from '@/shared/geometry';
 import type { AgentEvent, ViewportInfo } from '@/shared/messages';
 import { loadSettings } from '@/shared/settings';
-import type { CaptureMeta, CaptureMode, CaptureRecord, CaptureWarning, Size } from '@/shared/types';
+import type { CaptureMeta, CaptureMode, CaptureRecord, CaptureWarning, ScrollDirection, Size } from '@/shared/types';
 import { agentCall, agentTry, injectAgent } from './agent';
-import { captureFullPage } from './fullpage';
+import { captureScrolling } from './scrolling-engine';
 import { grabVisibleTab } from './grab';
 import { getActiveTab, restrictedReason, sanitizePageUrl } from './tabs';
 
@@ -186,15 +186,20 @@ async function runRegion(session: Session, rect: RegionEvent): Promise<void> {
   }
 }
 
-async function runFullPage(session: Session, target: 'document' | 'picked'): Promise<void> {
+async function runScrolling(
+  session: Session,
+  target: 'document' | 'picked' | 'region',
+  direction: ScrollDirection = 'vertical',
+): Promise<void> {
   const run = running.get(session.tabId) ?? { cancelled: false };
   running.set(session.tabId, run);
   const settings = await loadSettings();
   try {
-    const result = await captureFullPage({
+    const result = await captureScrolling({
       tabId: session.tabId,
       windowId: session.windowId,
       target,
+      direction,
       settleMs: settings.settleMs,
       isCancelled: () => run.cancelled,
       onProgress: (frame, total) => void setBadge(session.tabId, `${Math.min(frame + 1, total)}/${total}`),
@@ -263,7 +268,11 @@ export async function startCapture(mode: CaptureMode, requestedTabId?: number): 
       break;
     case 'fullPage':
       running.set(tabId, { cancelled: false });
-      void guarded(session, () => runFullPage(session, 'document'));
+      void guarded(session, () => runScrolling(session, 'document'));
+      break;
+    case 'scrollArea':
+      await saveSession(session);
+      await agentCall(tabId, { type: 'AGENT_SELECT_SCROLL_AREA' });
       break;
   }
 }
@@ -278,8 +287,13 @@ export async function handleAgentEvent(evt: AgentEvent, tabId: number): Promise<
     case 'EVT_ELEMENT_PICKED': {
       const session = await takeSession(tabId);
       if (!session) return;
-      if (evt.fullContent) await guarded(session, () => runFullPage(session, 'picked'));
+      if (evt.fullContent) await guarded(session, () => runScrolling(session, 'picked'));
       else await guarded(session, () => runRegion(session, evt));
+      return;
+    }
+    case 'EVT_SCROLL_AREA_SELECTED': {
+      const session = await takeSession(tabId);
+      if (session) await guarded(session, () => runScrolling(session, evt.target, evt.direction));
       return;
     }
     case 'EVT_CAPTURE_ABORT': {

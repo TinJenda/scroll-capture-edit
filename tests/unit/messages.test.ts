@@ -24,7 +24,7 @@ describe('message validation', () => {
     expect(parseAgentEvent({ type: 'START_CAPTURE', mode: 'visible' })).toBeNull();
   });
   it('agent commands are validated too', () => {
-    expect(parseAgentCommand({ type: 'AGENT_FP_SCROLL', y: 10, frame: 0, totalFrames: 3, settleMs: 100 })).not.toBeNull();
+    expect(parseAgentCommand({ type: 'AGENT_FP_SCROLL', x: 0, y: 10, frame: 0, totalFrames: 3, settleMs: 100 })).not.toBeNull();
     expect(parseAgentCommand({ type: 'AGENT_FP_SCROLL', y: 'x' })).toBeNull();
     expect(parseAgentCommand({ type: 'AGENT_SHOW_PREVIEW', id: ID })).not.toBeNull();
   });

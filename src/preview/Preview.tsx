@@ -15,6 +15,7 @@ const MODE_LABEL: Record<string, string> = {
   visible: 'Visible area',
   area: 'Selected area',
   fullPage: 'Full page',
+  scrollArea: 'Scrolling area',
   element: 'Element',
 };
 

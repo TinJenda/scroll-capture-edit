@@ -1,9 +1,10 @@
 import { intersectRect } from '@/shared/geometry';
 import { IMAGE_WAIT_MS } from '@/shared/constants';
 import { SnapflowError } from '@/shared/errors';
-import type { FullPagePrepareResult, FullPageScrollResult, FullPageTarget } from '@/shared/messages';
+import type { AxisInfo, FullPagePrepareResult, FullPageScrollResult } from '@/shared/messages';
+import { resolveAxes } from '@/shared/scroll-coords';
 import { frameRole, shouldHideFixed, type FixedPhase } from '@/shared/scroll';
-import type { Rect } from '@/shared/types';
+import type { Rect, ScrollDirection } from '@/shared/types';
 import { nextFrame, nextFrames, sleep } from './dom';
 
 /** Every element, descending into open shadow roots. Our own UI hosts are skipped. */
@@ -13,6 +14,13 @@ export function* allElements(root: ParentNode): Generator<HTMLElement> {
     yield node;
     if (node.shadowRoot) yield* allElements(node.shadowRoot);
   }
+}
+
+/** What to scroll. 'element' needs the element passed to prepare(); 'region' carries a viewport rectangle. */
+export interface ScrollSpec {
+  kind: 'document' | 'element' | 'region';
+  direction: ScrollDirection;
+  rect?: Rect;
 }
 
 interface FixedEntry {
@@ -30,12 +38,22 @@ interface SavedProp {
 
 type ScrollerEl = Element & { scrollTo: Element['scrollTo'] };
 
+const HIDDEN_OVERFLOW = /^(hidden|clip)$/;
+
+/** True when `overflow: hidden|clip` on <html> (or <body>) stops the page itself from scrolling on that axis. */
+export function isViewportOverflowBlocked(axis: 'x' | 'y'): boolean {
+  const pick = (cs: CSSStyleDeclaration) => (axis === 'x' ? cs.overflowX : cs.overflowY);
+  let value = pick(getComputedStyle(document.documentElement));
+  if (value === 'visible' && document.body) value = pick(getComputedStyle(document.body));
+  return HIDDEN_OVERFLOW.test(value);
+}
+
 /**
- * Page-side half of the full-page capture engine. It never takes screenshots; it only
- * (1) chooses what scrolls, (2) scrolls it deterministically, (3) keeps fixed/sticky
- * chrome from repeating in every frame, and (4) restores the page – always.
+ * Page-side half of the scrolling capture engine. It never takes screenshots; it only
+ * (1) works out what scrolls and where the capture window is, (2) scrolls deterministically on one or
+ * both axes, (3) keeps fixed/sticky chrome from repeating in every tile, and (4) restores the page – always.
  *
- * Every modification is recorded so restore() can undo it exactly, even after errors.
+ * Every modification is recorded so restore() can undo it exactly, even after errors or cancellation.
  */
 export class PageDriver {
   private active = false;
@@ -43,6 +61,9 @@ export class PageDriver {
   private saved = new Map<HTMLElement, Map<string, SavedProp>>();
   private fixed: FixedEntry[] = [];
   private scroller: HTMLElement | null = null; // null = the document
+  private spec: ScrollSpec = { kind: 'document', direction: 'vertical' };
+  private scrollsX = false;
+  private scrollsY = false;
   private origin = { winX: 0, winY: 0, elTop: 0, elLeft: 0 };
   private role: FixedPhase | null = null;
 
@@ -79,12 +100,13 @@ export class PageDriver {
     this.saved.clear();
   }
 
-  private setScroll(top: number): void {
-    if (this.scroller) {
-      (this.scroller as ScrollerEl).scrollTo({ top, left: 0, behavior: 'instant' });
-    } else {
-      window.scrollTo({ top, left: 0, behavior: 'instant' });
-    }
+  /** null leaves that axis where it is. */
+  private setScroll(left: number | null, top: number | null): void {
+    const opts: ScrollToOptions = { behavior: 'instant' };
+    if (top !== null) opts.top = top;
+    if (left !== null) opts.left = left;
+    if (this.scroller) (this.scroller as ScrollerEl).scrollTo(opts);
+    else window.scrollTo(opts);
   }
 
   /* ------------------------------ geometry ------------------------------ */
@@ -93,17 +115,25 @@ export class PageDriver {
     return { width: window.innerWidth, height: window.innerHeight };
   }
 
-  /** Capture region (CSS px, viewport coordinates). Excludes scrollbars so they never get stitched. */
-  private region(): Rect {
-    if (!this.scroller) {
-      const se = this.docScroller();
-      return {
-        x: 0,
-        y: 0,
-        width: se.clientWidth || window.innerWidth,
-        height: se.clientHeight || window.innerHeight,
-      };
+  /** Viewport area without scrollbars (CSS px). */
+  private viewportArea(): Rect {
+    const se = this.docScroller();
+    return { x: 0, y: 0, width: se.clientWidth || window.innerWidth, height: se.clientHeight || window.innerHeight };
+  }
+
+  /**
+   * The capture window (CSS px, viewport coordinates). It stays anchored while the content scrolls
+   * through it, and never includes scrollbars:
+   *  - document → the whole viewport area
+   *  - container → the container's client box
+   *  - manual region → the user's rectangle
+   */
+  private windowRect(): Rect {
+    const area = this.viewportArea();
+    if (this.spec.kind === 'region' && this.spec.rect) {
+      return intersectRect(this.spec.rect, area) ?? this.spec.rect;
     }
+    if (!this.scroller) return area;
     const r = this.scroller.getBoundingClientRect();
     const box = {
       x: r.left + this.scroller.clientLeft,
@@ -111,26 +141,52 @@ export class PageDriver {
       width: this.scroller.clientWidth,
       height: this.scroller.clientHeight,
     };
-    const vp = this.docScroller();
-    return (
-      intersectRect(box, { x: 0, y: 0, width: vp.clientWidth || window.innerWidth, height: vp.clientHeight || window.innerHeight }) ??
-      box
-    );
+    return intersectRect(box, area) ?? box;
   }
 
   private metrics() {
     const target = this.scroller ?? this.docScroller();
-    const region = this.region();
+    const area = this.viewportArea();
+    const clientHeight = this.scroller ? this.scroller.clientHeight : area.height;
+    const clientWidth = this.scroller ? this.scroller.clientWidth : area.width;
     const scrollTop = target.scrollTop;
+    const scrollLeft = target.scrollLeft;
     const scrollHeight = target.scrollHeight;
-    const clientHeight = this.scroller ? this.scroller.clientHeight : this.docScroller().clientHeight || window.innerHeight;
+    const scrollWidth = target.scrollWidth;
     return {
       scrollTop,
+      scrollLeft,
       scrollHeight,
+      scrollWidth,
       clientHeight,
-      maxScrollTop: Math.max(0, scrollHeight - clientHeight),
+      clientWidth,
+      maxTop: Math.max(0, scrollHeight - clientHeight),
+      maxLeft: Math.max(0, scrollWidth - clientWidth),
       atBottom: scrollTop + clientHeight >= scrollHeight - 1,
-      region,
+      atRight: scrollLeft + clientWidth >= scrollWidth - 1,
+      window: this.windowRect(),
+    };
+  }
+
+  private axes(): { x: AxisInfo; y: AxisInfo } {
+    const m = this.metrics();
+    // A container can be scrolled by script even with overflow:hidden; the viewport cannot.
+    const docBlocked = (axis: 'x' | 'y') => !this.scroller && isViewportOverflowBlocked(axis);
+    return {
+      y: {
+        scrollable: !docBlocked('y') && m.scrollHeight - m.clientHeight > 1,
+        scroll: m.scrollTop,
+        scrollLen: m.scrollHeight,
+        clientLen: m.clientHeight,
+        maxScroll: m.maxTop,
+      },
+      x: {
+        scrollable: !docBlocked('x') && m.scrollWidth - m.clientWidth > 1,
+        scroll: m.scrollLeft,
+        scrollLen: m.scrollWidth,
+        clientLen: m.clientWidth,
+        maxScroll: m.maxLeft,
+      },
     };
   }
 
@@ -160,8 +216,9 @@ export class PageDriver {
 
   /* ------------------------------ fixed / sticky ------------------------------ */
 
-  private classifyPositioned(region: Rect): number {
+  private classifyPositioned(win: Rect): number {
     this.fixed = [];
+    const horizontalOnly = this.scrollsX && !this.scrollsY;
     for (const node of allElements(document)) {
       const cs = getComputedStyle(node);
       const pos = cs.position;
@@ -179,14 +236,19 @@ export class PageDriver {
       if (cs.visibility === 'hidden') continue;
       const r = node.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) continue;
-      if (!intersectRect({ x: r.left, y: r.top, width: r.width, height: r.height }, region)) continue;
-      // Tall fixed elements (side navigation, modal backdrops) are part of the frame on purpose.
-      if (r.height >= region.height * 0.7) continue;
+      if (!intersectRect({ x: r.left, y: r.top, width: r.width, height: r.height }, win)) continue;
+      // Persistent fixed elements (side navigation, modal backdrops) span most of the window on the
+      // scrolled axis; they are part of every frame on purpose.
+      const tallV = r.height >= win.height * 0.7;
+      const wideH = r.width >= win.width * 0.7;
+      if (this.scrollsX && this.scrollsY ? tallV || wideH : horizontalOnly ? wideH : tallV) continue;
 
-      const centerY = r.top + r.height / 2 - region.y;
+      const anchor = horizontalOnly
+        ? r.left + r.width / 2 - win.x < win.width / 2
+        : r.top + r.height / 2 - win.y < win.height / 2;
       this.fixed.push({
         el: node,
-        anchor: centerY < region.height / 2 ? 'header' : 'footer',
+        anchor: anchor ? 'header' : 'footer',
         hidden: false,
         prevValue: node.style.getPropertyValue('visibility'),
         prevPriority: node.style.getPropertyPriority('visibility'),
@@ -210,9 +272,10 @@ export class PageDriver {
 
   /* ------------------------------ lifecycle ------------------------------ */
 
-  prepare(target: FullPageTarget, picked: Element | null): FullPagePrepareResult {
+  prepare(spec: ScrollSpec, picked: Element | null): FullPagePrepareResult {
     this.restore();
     this.active = true;
+    this.spec = spec;
     const notes: string[] = [];
     let autoNested = false;
 
@@ -228,13 +291,14 @@ export class PageDriver {
 
       const se = this.docScroller();
       const isDocElement = (n: Element) => n === document.documentElement || n === document.body || n === se;
-      const docScrollable = se.scrollHeight - se.clientHeight > 1;
 
-      if (target === 'picked' && picked && !isDocElement(picked)) {
-        this.scroller = picked as HTMLElement;
-      } else if (target === 'picked' && picked && isDocElement(picked) && docScrollable) {
+      if (spec.kind === 'element') {
+        if (!picked) throw new SnapflowError('CAPTURE_FAILED', 'The chosen element is no longer available.');
+        this.scroller = isDocElement(picked) ? null : (picked as HTMLElement);
+      } else if (spec.kind === 'region') {
         this.scroller = null;
-      } else if (target === 'document' && !docScrollable) {
+      } else if (spec.direction === 'vertical' && se.scrollHeight - se.clientHeight <= 1) {
+        // Full page of an "app shell" whose real scrolling happens in an inner container.
         const nested = this.findMainScroller();
         if (nested) {
           this.scroller = nested;
@@ -250,24 +314,45 @@ export class PageDriver {
         this.scroller.scrollIntoView({ block: r.height > window.innerHeight ? 'start' : 'nearest', inline: 'nearest', behavior: 'instant' });
       }
 
-      this.setScroll(0);
-      const region = this.region();
-      if (region.width < 20 || region.height < 20) {
+      // Which axes does this target really scroll? A request is reduced to what is possible.
+      const can = this.axes();
+      const r = resolveAxes(spec.direction, { x: can.x.scrollable, y: can.y.scrollable });
+      const singleFrameFullPage = spec.kind === 'document' && spec.direction === 'vertical';
+      if (!r.x && !r.y && !singleFrameFullPage) {
+        throw new SnapflowError(
+          'CAPTURE_FAILED',
+          `The selected ${spec.kind === 'region' ? 'page' : 'area'} does not scroll ${spec.direction === 'both' ? 'in either direction' : spec.direction + 'ly'}. ` +
+            'Choose another direction or another container.',
+        );
+      }
+      if (spec.direction === 'both' && r.direction !== 'both') {
+        notes.push(`The target only scrolls ${r.direction}ly, so only that direction was captured.`);
+      }
+      this.scrollsX = r.x;
+      this.scrollsY = r.y;
+
+      this.setScroll(r.x ? 0 : null, r.y ? 0 : null); // start of every scrolled axis
+      const win = this.windowRect();
+      if (win.width < 20 || win.height < 20) {
         throw new SnapflowError('CAPTURE_FAILED', 'The selected area is too small to capture.');
       }
-      if (this.scroller && region.height < this.scroller.clientHeight - 2) {
+      if (this.scroller && !this.scrollsX && win.height < this.scroller.clientHeight - 2) {
         notes.push('The element is taller than the window, so only its visible part could be captured.');
       }
 
-      const fixedCount = this.classifyPositioned(region);
+      const fixedCount = this.classifyPositioned(win);
       this.role = null;
       const m = this.metrics();
+      const axes = this.axes();
       const target2 = this.scroller ?? se;
       return {
         viewport: this.viewport(),
         dpr: window.devicePixelRatio || 1,
-        kind: this.scroller ? 'element' : 'document',
-        region: m.region,
+        kind: this.scroller ? 'element' : spec.kind === 'region' ? 'region' : 'document',
+        region: m.window,
+        direction: r.direction,
+        x: axes.x,
+        y: axes.y,
         scrollHeight: m.scrollHeight,
         scrollTop: target2.scrollTop,
         horizontalOverflow: target2.scrollWidth - target2.clientWidth > 4,
@@ -284,48 +369,56 @@ export class PageDriver {
   /** Waits for images in view that are still decoding/loading (bounded). */
   private async waitForImages(timeoutMs: number): Promise<void> {
     const vh = window.innerHeight;
+    const vw = window.innerWidth;
     const pending: Promise<unknown>[] = [];
     for (const img of Array.from(document.images)) {
       if (img.complete && img.naturalWidth > 0) continue;
       const r = img.getBoundingClientRect();
-      if (r.bottom < 0 || r.top > vh || r.width === 0) continue;
+      if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw || r.width === 0) continue;
       pending.push(img.decode().catch(() => undefined));
     }
     if (pending.length) await Promise.race([Promise.allSettled(pending), sleep(timeoutMs)]);
   }
 
-  async scrollTo(y: number, frame: number, settleMs: number): Promise<FullPageScrollResult> {
-    if (!this.active) throw new SnapflowError('CAPTURE_FAILED', 'Full-page capture was not prepared.');
+  async scrollTo(x: number, y: number, frame: number, settleMs: number): Promise<FullPageScrollResult> {
+    if (!this.active) throw new SnapflowError('CAPTURE_FAILED', 'Scrolling capture was not prepared.');
 
-    // Scroll, let layout/lazy content settle. If the page grew and the target is now reachable, scroll again.
+    // Scroll, let layout/lazy content settle. If the content grew and the target is now reachable, scroll again.
     for (let attempt = 0; attempt < 3; attempt++) {
-      this.setScroll(y);
+      this.setScroll(this.scrollsX ? x : null, this.scrollsY ? y : null);
       await nextFrames(2);
       await sleep(settleMs);
       await this.waitForImages(IMAGE_WAIT_MS);
       await nextFrame();
       const m = this.metrics();
-      if (Math.abs(m.scrollTop - y) <= 1 || m.scrollTop >= m.maxScrollTop - 1) break;
+      const okY = !this.scrollsY || Math.abs(m.scrollTop - y) <= 1 || m.scrollTop >= m.maxTop - 1;
+      const okX = !this.scrollsX || Math.abs(m.scrollLeft - x) <= 1 || m.scrollLeft >= m.maxLeft - 1;
+      if (okX && okY) break;
     }
 
     let m = this.metrics();
-    this.applyRole(frameRole(frame, m.atBottom));
+    const isLast = (!this.scrollsY || m.atBottom) && (!this.scrollsX || m.atRight);
+    this.applyRole(frameRole(frame, isLast));
     await nextFrame();
     m = this.metrics();
 
     return {
       scrollTop: m.scrollTop,
+      scrollLeft: m.scrollLeft,
       scrollHeight: m.scrollHeight,
-      maxScrollTop: m.maxScrollTop,
+      scrollWidth: m.scrollWidth,
+      maxScrollTop: m.maxTop,
+      maxScrollLeft: m.maxLeft,
       atBottom: m.atBottom,
-      region: m.region,
+      atRight: m.atRight,
+      region: m.window,
       viewport: this.viewport(),
     };
   }
 
-  measure(): { scrollHeight: number; scrollTop: number } {
+  measure(): { scrollHeight: number; scrollTop: number; scrollWidth: number; scrollLeft: number } {
     const target = this.scroller ?? this.docScroller();
-    return { scrollHeight: target.scrollHeight, scrollTop: target.scrollTop };
+    return { scrollHeight: target.scrollHeight, scrollTop: target.scrollTop, scrollWidth: target.scrollWidth, scrollLeft: target.scrollLeft };
   }
 
   restore(): void {
@@ -350,5 +443,7 @@ export class PageDriver {
       /* the element may have been removed from the DOM */
     }
     this.scroller = null;
+    this.scrollsX = false;
+    this.scrollsY = false;
   }
 }

@@ -1,77 +1,13 @@
 import type { Page } from '@playwright/test';
 import { describeColor, expect, near, test, type Harness } from './fixtures';
-
-type Pt = [number, number];
+import { RED, annotations, around, click, copiedPixels, drag, hasRed, openEditorFromPreview, type Pt } from './helpers';
 
 /** Capture the shapes page, press Edit in the preview and return the editor tab. */
 async function openEditor(h: Harness): Promise<Page> {
   const page = await h.open('/page.html');
   await h.capture(page, 'visible');
-  const frame = await h.previewFrame(page);
-  const opened = h.context.waitForEvent('page');
-  await frame.getByTestId('edit').click();
-  const editor = await opened;
-  await editor.waitForSelector('[data-testid="canvas-host"] canvas', { timeout: 20_000 });
-  await editor.waitForFunction(() => Boolean((window as unknown as { __snapflow?: unknown }).__snapflow));
-  await editor.bringToFront();
-  return editor;
+  return openEditorFromPreview(h, page);
 }
-
-/** Document (image) coordinates → screen coordinates inside the editor tab. */
-async function toScreen(editor: Page, pts: Pt[]): Promise<Pt[]> {
-  return editor.evaluate((points) => {
-    const host = (document.querySelector('[data-testid="canvas-host"]') as HTMLElement).getBoundingClientRect();
-    const v = (window as unknown as { __snapflow: { canvas: { view: { zoom: number; x: number; y: number } } } }).__snapflow.canvas.view;
-    return points.map(([x, y]) => [host.left + v.x + x * v.zoom, host.top + v.y + y * v.zoom] as [number, number]);
-  }, pts);
-}
-
-async function drag(editor: Page, from: Pt, to: Pt) {
-  const [a, b] = await toScreen(editor, [from, to]);
-  await editor.mouse.move(a[0], a[1]);
-  await editor.mouse.down();
-  await editor.mouse.move((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, { steps: 4 });
-  await editor.mouse.move(b[0], b[1], { steps: 4 });
-  await editor.mouse.up();
-}
-
-async function click(editor: Page, at: Pt) {
-  const [p] = await toScreen(editor, [at]);
-  await editor.mouse.click(p[0], p[1]);
-}
-
-const annotations = (editor: Page) =>
-  editor.evaluate(() => (window as unknown as { __snapflow: { store: { getState(): { history: { present: { annotations: Array<{ type: string; number?: number }> } } } } } }).__snapflow.store.getState().history.present.annotations);
-
-/** Click “Copy Image”, then read the real system clipboard back and sample it. */
-async function copiedPixels(editor: Page, points: Pt[]) {
-  await editor.getByTestId('copy-image').click();
-  await expect(editor.locator('.toast.success')).toContainText('copied', { timeout: 10_000 });
-  return editor.evaluate(async (pts) => {
-    const items = await navigator.clipboard.read();
-    const blob = await items[0].getType('image/png');
-    const bmp = await createImageBitmap(blob);
-    const c = new OffscreenCanvas(bmp.width, bmp.height);
-    const ctx = c.getContext('2d') as OffscreenCanvasRenderingContext2D;
-    ctx.drawImage(bmp, 0, 0);
-    return {
-      width: bmp.width,
-      height: bmp.height,
-      types: items.flatMap((i) => [...i.types]),
-      colors: pts.map(([x, y]) => Array.from(ctx.getImageData(x, y, 1, 1).data)),
-    };
-  }, points);
-}
-
-const RED = [255, 59, 48];
-
-/** Stroke edges are anti-aliased and the pointer maps to fractional image px, so probe a small window. */
-const around = ([x, y]: Pt, r = 2): Pt[] => {
-  const out: Pt[] = [];
-  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) out.push([x + dx, y + dy]);
-  return out;
-};
-const hasRed = (colors: number[][], tol = 6) => colors.some((c) => near(c, RED, tol));
 
 test('Preview → Edit → red rectangle + arrow → Copy Image: the pasted image contains the annotations', async ({ h }) => {
   const editor = await openEditor(h);

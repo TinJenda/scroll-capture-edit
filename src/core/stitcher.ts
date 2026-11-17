@@ -3,16 +3,31 @@ import { placeFrame, type OutputPlan } from '@/shared/stitch';
 import type { Rect } from '@/shared/types';
 import { canvasToBlob, createCanvas, get2d, type Ctx2D } from './image';
 
+/** A run of rows (or columns) of one frame, and where it lands in the output (full-resolution px). */
+export interface AxisSegment {
+  src: number;
+  dest: number;
+  len: number;
+}
+
+const GAP_MESSAGE =
+  'The content moved unexpectedly while scrolling (scroll-snapping or a layout shift), so the capture would have a gap. Try again, or capture a visible area instead.';
+
 /**
- * Streaming stitcher: every captured viewport frame is drawn into the output
- * canvas immediately and then released, so memory stays at
- * "one output canvas + one frame" no matter how long the page is.
+ * ImageStitchingService – streaming, axis-independent stitcher.
+ *
+ * Every captured tile is drawn into the output canvas immediately and then released, so memory stays at
+ * "one output canvas + one frame" no matter how large the scrolled area is. Placement works per axis:
+ * `placeX` / `placeY` decide which rows/columns of a tile are *new* (removing overlap exactly, using the
+ * tile's actual scroll offset), and `draw` copies the product of the two segments. Vertical, horizontal and
+ * 2-D (tile grid) captures are all the same operation with an axis that does or does not scroll.
  */
-export class Stitcher {
+export class ImageStitchingService {
   private canvas: OffscreenCanvas;
   private ctx: Ctx2D;
-  private coveredUntil = 0; // full-resolution px
   private plan: OutputPlan;
+  private coveredX = 0;
+  private coveredY = 0;
   frames = 0;
 
   constructor(plan: OutputPlan) {
@@ -26,18 +41,71 @@ export class Stitcher {
     return this.plan;
   }
 
-  /** Full-resolution rows stitched so far. */
-  get covered(): number {
-    return this.coveredUntil;
+  /** Full-resolution columns / rows stitched so far. */
+  get coveredWidth(): number {
+    return this.coveredX;
+  }
+  get coveredHeight(): number {
+    return this.coveredY;
+  }
+
+  get completeX(): boolean {
+    return this.coveredX >= this.plan.capturedFullWidth;
+  }
+  get completeY(): boolean {
+    return this.coveredY >= this.plan.capturedFullHeight;
+  }
+
+  private place(axis: 'x' | 'y', scroll: number, frameLen: number, scale: number): AxisSegment {
+    const covered = axis === 'x' ? this.coveredX : this.coveredY;
+    const outLen = axis === 'x' ? this.plan.capturedFullWidth : this.plan.capturedFullHeight;
+    const r = placeFrame({ scrollY: scroll, scale, frameHeight: frameLen, outHeight: outLen, coveredUntil: covered });
+    if (r.gap > 0) throw new SnapflowError('STITCH_GAP', GAP_MESSAGE);
+    if (axis === 'x') this.coveredX = r.coveredUntil;
+    else this.coveredY = r.coveredUntil;
+    return r.segment
+      ? { src: r.segment.srcY, dest: r.segment.destY, len: r.segment.height }
+      : { src: 0, dest: covered, len: 0 };
+  }
+
+  /** New columns of a tile captured at horizontal scroll `scrollX` (CSS px). */
+  placeX(scrollX: number, frameWidthPx: number, imageScale: number): AxisSegment {
+    return this.place('x', scrollX, frameWidthPx, imageScale);
+  }
+
+  /** New rows of a tile captured at vertical scroll `scrollY` (CSS px). */
+  placeY(scrollY: number, frameHeightPx: number, imageScale: number): AxisSegment {
+    return this.place('y', scrollY, frameHeightPx, imageScale);
   }
 
   /**
-   * Allow the output to grow (page got taller while capturing). Only possible at native
-   * scale; otherwise the caller keeps the original plan and reports a warning.
+   * Copy a tile into the output.
+   * @param region window inside the frame bitmap (px)
+   * @param xSeg   columns to copy (null = the whole window width, axis does not scroll)
+   * @param ySeg   rows to copy (null = the whole window height)
    */
-  grow(newFullHeight: number, limits: { maxDimension: number; maxArea: number }): boolean {
+  draw(frame: ImageBitmap, region: Rect, xSeg: AxisSegment | null, ySeg: AxisSegment | null): void {
+    this.frames += 1;
+    const k = this.plan.scale;
+    const sx = region.x + (xSeg?.src ?? 0);
+    const sw = xSeg ? xSeg.len : region.width;
+    const sy = region.y + (ySeg?.src ?? 0);
+    const sh = ySeg ? ySeg.len : region.height;
+    const dx0 = xSeg ? Math.round(xSeg.dest * k) : 0;
+    const dx1 = xSeg ? Math.min(this.canvas.width, Math.round((xSeg.dest + xSeg.len) * k)) : this.canvas.width;
+    const dy0 = ySeg ? Math.round(ySeg.dest * k) : 0;
+    const dy1 = ySeg ? Math.min(this.canvas.height, Math.round((ySeg.dest + ySeg.len) * k)) : this.canvas.height;
+    if (sw <= 0 || sh <= 0 || dx1 <= dx0 || dy1 <= dy0) return;
+    this.ctx.drawImage(frame, sx, sy, sw, sh, dx0, dy0, dx1 - dx0, dy1 - dy0);
+  }
+
+  /**
+   * Allow the output to grow taller (the scrolled content got longer while capturing). Only possible at
+   * native scale; otherwise the caller keeps the original plan and reports a warning.
+   */
+  growY(newFullHeight: number, limits: { maxDimension: number; maxArea: number }): boolean {
     const p = this.plan;
-    if (p.scale !== 1 || p.truncated) return false;
+    if (p.scale !== 1 || p.truncatedY) return false;
     if (newFullHeight <= p.outHeight) return true;
     if (newFullHeight > limits.maxDimension || newFullHeight * p.outWidth > limits.maxArea) return false;
     const next = createCanvas(p.outWidth, newFullHeight);
@@ -47,54 +115,6 @@ export class Stitcher {
     this.ctx = nextCtx;
     this.plan = { ...p, fullHeight: newFullHeight, outHeight: newFullHeight, capturedFullHeight: newFullHeight };
     return true;
-  }
-
-  /**
-   * @param frame     full viewport bitmap from captureVisibleTab
-   * @param scrollY   actual scroll offset of the scroller for this frame (CSS px)
-   * @param region    capture region inside the bitmap (px) – excludes scrollbars / is the element box
-   * @param imageScale image px per CSS px for this capture
-   */
-  addFrame(frame: ImageBitmap, scrollY: number, region: Rect, imageScale: number): void {
-    // Positions are computed in full-resolution space, then mapped to the (possibly scaled) output.
-    const placed = placeFrame({
-      scrollY,
-      scale: imageScale,
-      frameHeight: region.height,
-      outHeight: this.plan.capturedFullHeight,
-      coveredUntil: this.coveredUntil,
-    });
-    if (placed.gap > 0) {
-      throw new SnapflowError(
-        'STITCH_GAP',
-        'The page moved unexpectedly while scrolling (scroll-snapping or a layout shift), so the capture would have a gap. Try again, or capture a visible area instead.',
-      );
-    }
-    this.frames += 1;
-    const seg = placed.segment;
-    this.coveredUntil = placed.coveredUntil;
-    if (!seg) return;
-
-    const k = this.plan.scale;
-    const dy0 = Math.round(seg.destY * k);
-    const dy1 = Math.min(this.canvas.height, Math.round((seg.destY + seg.height) * k));
-    if (dy1 <= dy0) return;
-    this.ctx.drawImage(
-      frame,
-      region.x,
-      region.y + seg.srcY,
-      region.width,
-      seg.height,
-      0,
-      dy0,
-      this.canvas.width,
-      dy1 - dy0,
-    );
-  }
-
-  /** True once the whole planned height has been covered. */
-  get complete(): boolean {
-    return this.coveredUntil >= this.plan.capturedFullHeight;
   }
 
   async finish(): Promise<Blob> {

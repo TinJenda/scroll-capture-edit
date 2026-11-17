@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Nested scroll containers (ambiguous)</title>
+<style>html,body{margin:0;background:#fff}
+#outer{position:absolute;left:40px;top:40px;width:520px;height:420px;overflow:auto;border:2px solid #000;box-sizing:content-box;background:#ddd}
+#inner{width:500px;height:400px;overflow:auto;background:#fff}
+#spacer{height:800px;background:repeating-linear-gradient(#ddd 0 50px,#bbb 50px 100px)}
+</style></head>
+<body><div id="outer"><div id="inner"></div><div id="spacer"></div></div>
+<script src="/_bands.js"></script>
+<script>makeBands(document.getElementById('inner'), 40, 50, false);</script></body></html>

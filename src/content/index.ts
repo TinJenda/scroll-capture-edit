@@ -8,17 +8,27 @@ import {
   parseAgentCommand,
   type AgentCommand,
   type AgentEvent,
+  type FullPageTarget,
   type ViewportInfo,
 } from '@/shared/messages';
+import type { Rect } from '@/shared/types';
 import { AreaSelector } from './area-select';
 import { setAllLayersHidden, removeAllLayers, waitForPaint } from './dom';
 import { ElementPicker } from './element-picker';
-import { PageDriver } from './page-driver';
+import { PageDriver, type ScrollSpec } from './page-driver';
 import { PreviewOverlay } from './preview-overlay';
 import { ProgressUi } from './progress';
+import { ScrollAreaSelector } from './scroll-area-select';
 
 interface AgentHandle {
   destroy(): void;
+}
+
+/** What the user chose to scroll; consumed by the next AGENT_FP_PREPARE. */
+interface PendingScroll {
+  target: FullPageTarget;
+  element: Element | null;
+  rect: Rect | null;
 }
 
 const GLOBAL_KEY = '__snapflowAgent__';
@@ -29,7 +39,8 @@ class Agent implements AgentHandle {
   private preview = new PreviewOverlay();
   private selector: AreaSelector | null = null;
   private picker: ElementPicker | null = null;
-  private pickedElement: Element | null = null;
+  private scrollSelector: ScrollAreaSelector | null = null;
+  private pending: PendingScroll | null = null;
   private port: chrome.runtime.Port | null = null;
   private destroyed = false;
 
@@ -87,8 +98,10 @@ class Agent implements AgentHandle {
   private closeInteractive(): void {
     this.selector?.destroy();
     this.picker?.destroy();
+    this.scrollSelector?.destroy();
     this.selector = null;
     this.picker = null;
+    this.scrollSelector = null;
   }
 
   private async handle(cmd: AgentCommand): Promise<unknown> {
@@ -131,6 +144,30 @@ class Agent implements AgentHandle {
         return true;
       }
 
+      case 'AGENT_SELECT_SCROLL_AREA': {
+        this.closeInteractive();
+        this.preview.setHidden(true);
+        this.scrollSelector = new ScrollAreaSelector({
+          onDone: (choice) => {
+            this.scrollSelector = null;
+            this.pending = { target: choice.target, element: choice.element, rect: choice.rect };
+            this.send({
+              type: 'EVT_SCROLL_AREA_SELECTED',
+              target: choice.target,
+              direction: choice.direction,
+              viewport: { width: window.innerWidth, height: window.innerHeight },
+              dpr: window.devicePixelRatio || 1,
+            });
+          },
+          onCancel: () => {
+            this.scrollSelector = null;
+            this.preview.setHidden(false);
+            this.send({ type: 'EVT_CAPTURE_ABORT', reason: 'cancelled' });
+          },
+        });
+        return true;
+      }
+
       case 'AGENT_PICK_ELEMENT': {
         this.closeInteractive();
         this.preview.setHidden(true);
@@ -147,8 +184,20 @@ class Agent implements AgentHandle {
 
       case 'AGENT_FP_PREPARE': {
         this.preview.setHidden(true);
-        const result = this.driver.prepare(cmd.target, this.pickedElement);
-        this.pickedElement = null;
+        const pending = this.pending;
+        this.pending = null;
+        let spec: ScrollSpec;
+        let element: Element | null = null;
+        if (cmd.target === 'region') {
+          if (!pending?.rect) throw new SnapflowError('CAPTURE_FAILED', 'The selected region is no longer available. Please select it again.');
+          spec = { kind: 'region', direction: cmd.direction, rect: pending.rect };
+        } else if (cmd.target === 'picked') {
+          element = pending?.element ?? null;
+          spec = { kind: 'element', direction: cmd.direction };
+        } else {
+          spec = { kind: 'document', direction: cmd.direction };
+        }
+        const result = this.driver.prepare(spec, element);
         this.connectPort();
         this.progress.show('Preparing capture…', 0);
         return result;
@@ -156,8 +205,8 @@ class Agent implements AgentHandle {
 
       case 'AGENT_FP_SCROLL': {
         const total = Math.max(1, cmd.totalFrames);
-        this.progress.show(`Capturing full page… ${Math.min(cmd.frame + 1, total)} / ${total}`, cmd.frame / total);
-        const result = await this.driver.scrollTo(cmd.y, cmd.frame, cmd.settleMs);
+        this.progress.show(`Capturing… ${Math.min(cmd.frame + 1, total)} / ${total}`, cmd.frame / total);
+        const result = await this.driver.scrollTo(cmd.x, cmd.y, cmd.frame, cmd.settleMs);
         // The progress pill must not appear in the screenshot.
         this.progress.setHidden(true);
         await waitForPaint(30);
@@ -188,7 +237,7 @@ class Agent implements AgentHandle {
   private async onElementPicked(node: Element, fullContent: boolean): Promise<void> {
     this.picker = null;
     try {
-      if (fullContent) this.pickedElement = node;
+      if (fullContent) this.pending = { target: 'picked', element: node, rect: null };
       else {
         node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
         await waitForPaint(30);

@@ -102,7 +102,7 @@ export const DEFAULT_LIMITS: OutputLimits = {
 };
 
 export interface OutputPlan {
-  /** Full-resolution size of the page region. */
+  /** Full-resolution size of the captured region. */
   fullWidth: number;
   fullHeight: number;
   /** Scale applied to produce the output (1 = native resolution). */
@@ -110,9 +110,12 @@ export interface OutputPlan {
   outWidth: number;
   outHeight: number;
   downscaled: boolean;
-  /** True when the page is taller than what can be produced at a readable scale. */
+  /** True when the region is larger than what can be produced at a readable scale. */
   truncated: boolean;
-  /** Full-resolution rows that will actually be captured (== fullHeight unless truncated). */
+  truncatedX: boolean;
+  truncatedY: boolean;
+  /** Full-resolution columns / rows that will actually be captured (== full size unless truncated). */
+  capturedFullWidth: number;
   capturedFullHeight: number;
 }
 
@@ -120,8 +123,8 @@ export interface OutputPlan {
  * Decide how large the stitched image may be. Never silently truncates:
  *  1. Fits at native resolution → as is.
  *  2. Fits at ≥ minScale → uniformly downscaled (flag `downscaled`).
- *  3. Otherwise → captured down to the height that fits at minScale (flag `truncated`).
- * The caller turns the flags into user-visible warnings.
+ *  3. Otherwise → captured up to what fits at minScale (flags `truncated`, `truncatedX` / `truncatedY`).
+ * The caller turns the flags into user-visible warnings. Works for vertical, horizontal and 2-D captures.
  */
 export function planOutputSize(
   fullWidth: number,
@@ -129,22 +132,30 @@ export function planOutputSize(
   limits: OutputLimits = DEFAULT_LIMITS,
 ): OutputPlan {
   if (fullWidth < 1 || fullHeight < 1) {
-    throw new SnapflowError('CAPTURE_FAILED', 'The page has no measurable size.');
-  }
-  const widthScale = limits.maxDimension / fullWidth;
-  if (widthScale < limits.minScale) {
-    throw new SnapflowError('TOO_LARGE', 'The page is too wide to capture at a readable size.');
+    throw new SnapflowError('CAPTURE_FAILED', 'The capture area has no measurable size.');
   }
 
   const fit = Math.min(
     1,
-    widthScale,
+    limits.maxDimension / fullWidth,
     limits.maxDimension / fullHeight,
     Math.sqrt(limits.maxArea / (fullWidth * fullHeight)),
   );
 
   if (fit >= 1) {
-    return { fullWidth, fullHeight, scale: 1, outWidth: fullWidth, outHeight: fullHeight, downscaled: false, truncated: false, capturedFullHeight: fullHeight };
+    return {
+      fullWidth,
+      fullHeight,
+      scale: 1,
+      outWidth: fullWidth,
+      outHeight: fullHeight,
+      downscaled: false,
+      truncated: false,
+      truncatedX: false,
+      truncatedY: false,
+      capturedFullWidth: fullWidth,
+      capturedFullHeight: fullHeight,
+    };
   }
 
   if (fit >= limits.minScale) {
@@ -156,22 +167,36 @@ export function planOutputSize(
       outHeight: Math.max(1, Math.floor(fullHeight * fit)),
       downscaled: true,
       truncated: false,
+      truncatedX: false,
+      truncatedY: false,
+      capturedFullWidth: fullWidth,
       capturedFullHeight: fullHeight,
     };
   }
 
-  const scale = Math.min(limits.minScale, widthScale);
-  const outWidth = Math.max(1, Math.floor(fullWidth * scale));
-  const maxOutHeight = Math.floor(Math.min(limits.maxDimension, limits.maxArea / outWidth));
-  const outHeight = Math.max(1, Math.min(maxOutHeight, Math.floor(fullHeight * scale)));
+  // Readable-scale floor reached: keep minScale and cut the dimension(s) that do not fit, loudly.
+  const scale = limits.minScale;
+  const wantW = Math.max(1, Math.floor(fullWidth * scale));
+  const wantH = Math.max(1, Math.floor(fullHeight * scale));
+  let outWidth = Math.min(wantW, limits.maxDimension);
+  let outHeight = Math.min(wantH, limits.maxDimension);
+  if (outWidth * outHeight > limits.maxArea) {
+    if (outHeight >= outWidth) outHeight = Math.max(1, Math.floor(limits.maxArea / outWidth));
+    else outWidth = Math.max(1, Math.floor(limits.maxArea / outHeight));
+  }
+  const truncatedX = outWidth < wantW;
+  const truncatedY = outHeight < wantH;
   return {
     fullWidth,
     fullHeight,
     scale,
     outWidth,
     outHeight,
-    downscaled: scale < 1,
-    truncated: outHeight < Math.floor(fullHeight * scale),
-    capturedFullHeight: Math.min(fullHeight, Math.ceil(outHeight / scale)),
+    downscaled: true,
+    truncated: truncatedX || truncatedY,
+    truncatedX,
+    truncatedY,
+    capturedFullWidth: truncatedX ? Math.min(fullWidth, Math.ceil(outWidth / scale)) : fullWidth,
+    capturedFullHeight: truncatedY ? Math.min(fullHeight, Math.ceil(outHeight / scale)) : fullHeight,
   };
 }

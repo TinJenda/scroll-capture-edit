@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Scrollable table</title>
+<style>html,body{margin:0;background:#fff;font:16px system-ui}
+h1{margin:12px 40px}
+#table{position:absolute;left:40px;top:100px;width:600px;height:400px;overflow:auto;border:2px solid #000;box-sizing:content-box}
+#side{position:absolute;left:700px;top:100px;width:200px;height:300px;background:#ff8800}
+</style></head>
+<body><h1>200-row scrollable table</h1><div id="table"></div><div id="side">unrelated</div>
+<script src="/_bands.js"></script>
+<script>
+const t = document.getElementById('table');
+makeBands(t, param('n', 200), 30, false);
+const start = param('start', 0);
+if (start) t.scrollTop = start;
+</script></body></html>

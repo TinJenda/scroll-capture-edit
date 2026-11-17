@@ -93,8 +93,21 @@ describe('output size planning (never silently truncates)', () => {
     const p = planOutputSize(8000, 16000, { maxDimension: 16384, maxArea: 100_000_000, minScale: 0.5 });
     expect(p.outWidth * p.outHeight).toBeLessThanOrEqual(100_000_000);
   });
-  it('refuses absurdly wide pages and empty sizes', () => {
-    expect(() => planOutputSize(50000, 1000)).toThrow(SnapflowError);
+  it('truncates (and flags) areas that are too wide, e.g. a huge horizontal table', () => {
+    const p = planOutputSize(50000, 1000);
+    expect(p.truncated).toBe(true);
+    expect(p.truncatedX).toBe(true);
+    expect(p.truncatedY).toBe(false);
+    expect(p.outWidth).toBeLessThanOrEqual(16384);
+    expect(p.capturedFullWidth).toBeLessThan(50000);
+    expect(p.capturedFullHeight).toBe(1000);
+  });
+  it('flags both axes for a huge 2-D area', () => {
+    const p = planOutputSize(40000, 40000);
+    expect(p.truncatedX && p.truncatedY).toBe(true);
+    expect(p.outWidth * p.outHeight).toBeLessThanOrEqual(100_000_000);
+  });
+  it('rejects empty sizes', () => {
     expect(() => planOutputSize(0, 10)).toThrow(SnapflowError);
   });
 });

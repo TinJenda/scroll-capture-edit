@@ -1,4 +1,4 @@
-import { Crop, History, Keyboard, Monitor, MousePointerClick, ScrollText, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
+import { ArrowDownUp, Crop, History, Keyboard, Monitor, MousePointerClick, ScrollText, Settings as SettingsIcon, type LucideIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { serializeError } from '@/shared/errors';
 import type { TabSupport } from '@/shared/messages';
@@ -18,6 +18,7 @@ const MODES: ModeDef[] = [
   { mode: 'visible', command: 'capture-visible', title: 'Capture Visible Area', hint: 'Exactly what you see in the window', Icon: Monitor },
   { mode: 'area', command: 'capture-area', title: 'Capture Selected Area', hint: 'Drag to select a region on the page', Icon: Crop },
   { mode: 'fullPage', command: 'capture-full-page', title: 'Capture Full Page', hint: 'Scroll and stitch the whole page', Icon: ScrollText },
+  { mode: 'scrollArea', command: 'capture-scroll-area', title: 'Capture Scrolling Area', hint: 'Select a table, panel or region and scroll it', Icon: ArrowDownUp },
   { mode: 'element', command: 'capture-element', title: 'Capture Element', hint: 'Hover and click any element', Icon: MousePointerClick },
 ];
 

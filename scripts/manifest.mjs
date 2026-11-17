@@ -46,6 +46,10 @@ export function createManifest(opts = {}) {
         suggested_key: { default: 'Alt+Shift+F' },
         description: 'Capture full page',
       },
+      // No default key: Chrome only lets an extension suggest four. Bind one at chrome://extensions/shortcuts.
+      'capture-scroll-area': {
+        description: 'Capture a scrolling area',
+      },
       'capture-element': {
         suggested_key: { default: 'Alt+Shift+E' },
         description: 'Capture an element',

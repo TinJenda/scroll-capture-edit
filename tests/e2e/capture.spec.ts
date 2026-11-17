@@ -1,51 +1,10 @@
 import type { Page } from '@playwright/test';
 import { bandColor, describeColor, expect, near, test, type Harness } from './fixtures';
-
-type Pt = [number, number];
-
-async function pageInfo(page: Page) {
-  return page.evaluate(() => ({
-    cw: document.documentElement.clientWidth,
-    ch: document.documentElement.clientHeight,
-    sh: document.documentElement.scrollHeight,
-    iw: window.innerWidth,
-    ih: window.innerHeight,
-    dpr: window.devicePixelRatio,
-    sy: window.scrollY,
-  }));
-}
-
-/** Image-pixel sample point for a CSS-pixel position. */
-const px = (x: number, y: number, s: number): Pt => [Math.round(x * s), Math.round(y * s)];
+import { expectBands, pageInfo, px, type Pt } from './helpers';
 
 async function finishFullPage(h: Harness, page: Page) {
   await h.capture(page, 'fullPage');
   await h.previewFrame(page);
-}
-
-/** Checks band order, exact boundaries (no seams / duplication) for a page of equal-height bands. */
-async function expectBands(h: Harness, opts: { count: number; bandH: number; scale: number; offset?: number; sampleX?: number; outScale?: number }) {
-  const { count, bandH, scale, offset = 0, sampleX = 10 } = opts;
-  const k = opts.outScale ?? scale;
-  const points: Pt[] = [];
-  for (let i = 0; i < count; i++) points.push(px(sampleX, offset + i * bandH + bandH / 2, k));
-  for (let i = 1; i < count; i++) {
-    const yb = Math.round((offset + i * bandH) * k);
-    points.push([Math.round(sampleX * k), yb - 1], [Math.round(sampleX * k), yb]);
-  }
-  const cap = await h.latestCapture(points);
-  const bad: string[] = [];
-  for (let i = 0; i < count; i++) {
-    if (!near(cap.colors[i], bandColor(i), 2)) bad.push(`band ${i} centre ${describeColor(cap.colors[i])} ≠ ${describeColor(bandColor(i))}`);
-  }
-  for (let i = 1; i < count; i++) {
-    const above = cap.colors[count + (i - 1) * 2];
-    const below = cap.colors[count + (i - 1) * 2 + 1];
-    if (!near(above, bandColor(i - 1), 2)) bad.push(`boundary ${i}: row above is ${describeColor(above)} not band ${i - 1}`);
-    if (!near(below, bandColor(i), 2)) bad.push(`boundary ${i}: row below is ${describeColor(below)} not band ${i}`);
-  }
-  expect(bad, bad.slice(0, 6).join('\n')).toEqual([]);
-  return cap;
 }
 
 test.describe('area capture', () => {

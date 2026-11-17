@@ -1,4 +1,7 @@
-export type CaptureMode = 'visible' | 'area' | 'fullPage' | 'element';
+export type CaptureMode = 'visible' | 'area' | 'fullPage' | 'scrollArea' | 'element';
+
+/** Which axis (or axes) a scrolling capture follows. */
+export type ScrollDirection = 'vertical' | 'horizontal' | 'both';
 
 export interface Rect {
   x: number;

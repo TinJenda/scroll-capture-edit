@@ -31,6 +31,7 @@ const COMMAND_MODES: Record<string, CaptureMode> = {
   'capture-visible': 'visible',
   'capture-area': 'area',
   'capture-full-page': 'fullPage',
+  'capture-scroll-area': 'scrollArea',
   'capture-element': 'element',
 };
 

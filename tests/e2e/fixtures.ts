@@ -21,7 +21,7 @@ export interface Harness {
   helper: Page;
   open(pathAndQuery: string): Promise<Page>;
   /** Start a capture on the page like the popup would. */
-  capture(page: Page, mode: 'visible' | 'area' | 'fullPage' | 'element'): Promise<void>;
+  capture(page: Page, mode: 'visible' | 'area' | 'fullPage' | 'scrollArea' | 'element'): Promise<void>;
   /** Wait for the in-page preview overlay iframe and return its frame. */
   previewFrame(page: Page): Promise<Frame>;
   /** Latest capture saved in IndexedDB, sampled at the given image-pixel points. */
@@ -157,7 +157,7 @@ export const test = base.extend<{ env: Env; h: Harness }>({
 });
 
 /** Mirror of the colour generator used by the fixture pages. */
-export const bandColor = (i: number): [number, number, number] => [(i * 6) % 256, (255 - i * 6 + 256) % 256, (i * 37) % 256];
+export const bandColor = (i: number): [number, number, number] => [(i * 6) % 256, (((255 - i * 6) % 256) + 256) % 256, (i * 37) % 256];
 
 export function near(actual: ArrayLike<number>, expected: ArrayLike<number>, tol = 3): boolean {
   for (let i = 0; i < 3; i++) if (Math.abs(actual[i] - expected[i]) > tol) return false;

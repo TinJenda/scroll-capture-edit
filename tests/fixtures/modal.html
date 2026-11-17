@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Long modal</title>
+<style>html,body{margin:0;background:#123456;font:16px system-ui}
+#page{height:3000px;background:repeating-linear-gradient(#123456 0 100px,#654321 100px 200px)}
+#backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45)}
+#modal{position:fixed;left:200px;top:80px;width:500px;height:400px;overflow:auto;background:#fff;box-shadow:0 10px 40px #000}
+</style></head>
+<body><div id="page"></div><div id="backdrop"></div><div id="modal"></div>
+<script src="/_bands.js"></script>
+<script>makeBands(document.getElementById('modal'), 40, 60, false);</script></body></html>

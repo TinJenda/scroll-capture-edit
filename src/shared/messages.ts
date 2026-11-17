@@ -1,5 +1,5 @@
 import type { SerializedError } from './errors';
-import type { CaptureMode, Rect, Size } from './types';
+import type { CaptureMode, Rect, ScrollDirection, Size } from './types';
 
 /* ------------------------------------------------------------------ */
 /* Requests handled by the service worker                              */
@@ -22,6 +22,7 @@ export type PageRequest =
 export type AgentEvent =
   | { type: 'EVT_AREA_SELECTED'; rect: Rect; viewport: Size; dpr: number }
   | { type: 'EVT_ELEMENT_PICKED'; rect: Rect; viewport: Size; dpr: number; fullContent: boolean }
+  | { type: 'EVT_SCROLL_AREA_SELECTED'; target: FullPageTarget; direction: ScrollDirection; viewport: Size; dpr: number }
   | { type: 'EVT_CAPTURE_ABORT'; reason: 'cancelled' | 'error'; message?: string }
   | { type: 'EVT_CANCEL_FULLPAGE' };
 
@@ -39,17 +40,25 @@ export interface TabSupport {
 /* Commands the service worker sends to the content agent               */
 /* ------------------------------------------------------------------ */
 
-export type FullPageTarget = 'document' | 'picked';
+/**
+ * What scrolls during a scrolling capture:
+ *  - 'document': the page itself (full page)
+ *  - 'picked':   the container the agent remembered (element capture or auto-detected scroll container)
+ *  - 'region':   a rectangle fixed to the viewport while the document scrolls (manual region)
+ */
+export type FullPageTarget = 'document' | 'picked' | 'region';
 
 export type AgentCommand =
   | { type: 'AGENT_PING' }
   | { type: 'AGENT_HIDE_UI' }
   | { type: 'AGENT_SELECT_AREA' }
+  | { type: 'AGENT_SELECT_SCROLL_AREA' }
   | { type: 'AGENT_PICK_ELEMENT' }
   | { type: 'AGENT_CANCEL_UI' }
-  | { type: 'AGENT_FP_PREPARE'; target: FullPageTarget }
+  | { type: 'AGENT_FP_PREPARE'; target: FullPageTarget; direction: ScrollDirection }
   | {
       type: 'AGENT_FP_SCROLL';
+      x: number;
       y: number;
       frame: number;
       totalFrames: number;
@@ -66,12 +75,26 @@ export interface ViewportInfo {
   dpr: number;
 }
 
+/** Scroll geometry of one axis of the scroller (CSS px). */
+export interface AxisInfo {
+  /** The scroller can move along this axis (content is larger than its client box). */
+  scrollable: boolean;
+  scroll: number;
+  scrollLen: number;
+  clientLen: number;
+  maxScroll: number;
+}
+
 export interface FullPagePrepareResult {
   viewport: Size;
   dpr: number;
-  kind: 'document' | 'element';
-  /** Capture region inside the viewport, in CSS px (excludes scrollbars). */
+  kind: 'document' | 'element' | 'region';
+  /** Capture window inside the viewport, in CSS px (excludes scrollbars; fixed while scrolling). */
   region: Rect;
+  /** Direction actually used (a requested direction may be reduced to what the target supports). */
+  direction: ScrollDirection;
+  x: AxisInfo;
+  y: AxisInfo;
   scrollHeight: number;
   scrollTop: number;
   horizontalOverflow: boolean;
@@ -83,10 +106,14 @@ export interface FullPagePrepareResult {
 
 export interface FullPageScrollResult {
   scrollTop: number;
+  scrollLeft: number;
   scrollHeight: number;
+  scrollWidth: number;
   maxScrollTop: number;
+  maxScrollLeft: number;
   /** True when the scroller is at (or within a pixel of) the very bottom after settling. */
   atBottom: boolean;
+  atRight: boolean;
   region: Rect;
   viewport: Size;
 }
@@ -100,7 +127,12 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 const isStr = (v: unknown, max = 512): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;
 const isOptId = (v: unknown) => v === undefined || (isNum(v) && Number.isInteger(v) && v >= 0);
 
-export const CAPTURE_MODES: readonly CaptureMode[] = ['visible', 'area', 'fullPage', 'element'];
+export const CAPTURE_MODES: readonly CaptureMode[] = ['visible', 'area', 'fullPage', 'scrollArea', 'element'];
+
+export const SCROLL_DIRECTIONS: readonly ScrollDirection[] = ['vertical', 'horizontal', 'both'];
+export const isScrollDirection = (v: unknown): v is ScrollDirection =>
+  typeof v === 'string' && (SCROLL_DIRECTIONS as readonly string[]).includes(v);
+export const isFullPageTarget = (v: unknown): v is FullPageTarget => v === 'document' || v === 'picked' || v === 'region';
 
 export function isCaptureMode(v: unknown): v is CaptureMode {
   return typeof v === 'string' && (CAPTURE_MODES as readonly string[]).includes(v);
@@ -155,6 +187,10 @@ export function parseAgentEvent(raw: unknown): AgentEvent | null {
       return isRect(raw.rect) && isSize(raw.viewport) && isNum(raw.dpr) && raw.dpr > 0 && typeof raw.fullContent === 'boolean'
         ? { type: 'EVT_ELEMENT_PICKED', rect: raw.rect, viewport: raw.viewport, dpr: raw.dpr, fullContent: raw.fullContent }
         : null;
+    case 'EVT_SCROLL_AREA_SELECTED':
+      return isFullPageTarget(raw.target) && isScrollDirection(raw.direction) && isSize(raw.viewport) && isNum(raw.dpr) && raw.dpr > 0
+        ? { type: 'EVT_SCROLL_AREA_SELECTED', target: raw.target, direction: raw.direction, viewport: raw.viewport, dpr: raw.dpr }
+        : null;
     case 'EVT_CAPTURE_ABORT':
       return raw.reason === 'cancelled' || raw.reason === 'error'
         ? {
@@ -177,18 +213,19 @@ export function parseAgentCommand(raw: unknown): AgentCommand | null {
     case 'AGENT_PING':
     case 'AGENT_HIDE_UI':
     case 'AGENT_SELECT_AREA':
+    case 'AGENT_SELECT_SCROLL_AREA':
     case 'AGENT_PICK_ELEMENT':
     case 'AGENT_CANCEL_UI':
     case 'AGENT_FP_MEASURE':
     case 'AGENT_FP_RESTORE':
       return { type: raw.type };
     case 'AGENT_FP_PREPARE':
-      return raw.target === 'document' || raw.target === 'picked'
-        ? { type: 'AGENT_FP_PREPARE', target: raw.target }
+      return isFullPageTarget(raw.target) && isScrollDirection(raw.direction)
+        ? { type: 'AGENT_FP_PREPARE', target: raw.target, direction: raw.direction }
         : null;
     case 'AGENT_FP_SCROLL':
-      return isNum(raw.y) && isNum(raw.frame) && isNum(raw.totalFrames) && isNum(raw.settleMs)
-        ? { type: 'AGENT_FP_SCROLL', y: raw.y, frame: raw.frame, totalFrames: raw.totalFrames, settleMs: raw.settleMs }
+      return isNum(raw.x) && isNum(raw.y) && isNum(raw.frame) && isNum(raw.totalFrames) && isNum(raw.settleMs)
+        ? { type: 'AGENT_FP_SCROLL', x: raw.x, y: raw.y, frame: raw.frame, totalFrames: raw.totalFrames, settleMs: raw.settleMs }
         : null;
     case 'AGENT_SHOW_PREVIEW':
       return isCaptureId(raw.id) ? { type: 'AGENT_SHOW_PREVIEW', id: raw.id } : null;

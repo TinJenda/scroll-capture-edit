@@ -43,7 +43,7 @@ describe('cleanup after cancellation or failure', () => {
 
   it('restore() undoes every page modification and the scroll position', () => {
     const d = new PageDriver();
-    const prep = d.prepare('document', null);
+    const prep = d.prepare({ kind: 'document', direction: 'vertical' }, null);
     expect(prep.fixedCount).toBe(2);
     expect(document.querySelector('style[data-snapflow-style]')).not.toBeNull();
     expect(sticky.style.position).toBe('static'); // sticky → static while capturing
@@ -65,7 +65,7 @@ describe('cleanup after cancellation or failure', () => {
   it('restore() is idempotent and safe when nothing was prepared', () => {
     const d = new PageDriver();
     expect(() => d.restore()).not.toThrow();
-    d.prepare('document', null);
+    d.prepare({ kind: 'document', direction: 'vertical' }, null);
     d.restore();
     expect(() => d.restore()).not.toThrow();
   });
@@ -74,7 +74,7 @@ describe('cleanup after cancellation or failure', () => {
     Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 5 });
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 5 });
     const d = new PageDriver();
-    expect(() => d.prepare('document', null)).toThrow(/too small/);
+    expect(() => d.prepare({ kind: 'document', direction: 'vertical' }, null)).toThrow(/too small/);
     expect(document.querySelector('style[data-snapflow-style]')).toBeNull();
     expect(sticky.style.position).toBe('sticky');
     expect(d.isActive).toBe(false);

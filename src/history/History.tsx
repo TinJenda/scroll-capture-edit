@@ -22,7 +22,7 @@ function Thumb({ record, onOpen }: { record: CaptureRecord; onOpen(): void }) {
   );
 }
 
-const MODE: Record<string, string> = { visible: 'Visible area', area: 'Selected area', fullPage: 'Full page', element: 'Element' };
+const MODE: Record<string, string> = { visible: 'Visible area', area: 'Selected area', fullPage: 'Full page', scrollArea: 'Scrolling area', element: 'Element' };
 
 export function History() {
   const [settings, update] = useSettings();
