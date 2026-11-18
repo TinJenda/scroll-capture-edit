@@ -1,6 +1,6 @@
 {
   "name": "snapflow",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SnapFlow – Smart Screen Capture & Editor. Privacy-first Chrome extension (Manifest V3) for visible, area, element and full-page screenshots with a fast annotation editor.",
   "private": true,
   "type": "module",

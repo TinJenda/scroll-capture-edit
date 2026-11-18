@@ -20,7 +20,13 @@ export function* allElements(root: ParentNode): Generator<HTMLElement> {
 export interface ScrollSpec {
   kind: 'document' | 'element' | 'region';
   direction: ScrollDirection;
+  /** region: the capture window in viewport CSS px. */
   rect?: Rect;
+  /**
+   * element: the user's selection relative to the container's client box. It narrows the capture across
+   * the scroll axis (e.g. one column of a table); along the scroll axis the whole content is always used.
+   */
+  rel?: Rect | null;
 }
 
 interface FixedEntry {
@@ -141,7 +147,22 @@ export class PageDriver {
       width: this.scroller.clientWidth,
       height: this.scroller.clientHeight,
     };
-    return intersectRect(box, area) ?? box;
+    const full = intersectRect(box, area) ?? box;
+
+    // Narrow across the scroll axis to the user's selection (single-axis captures only).
+    const rel = this.spec.kind === 'element' ? this.spec.rel : null;
+    if (!rel) return full;
+    const cross = this.scrollsY && !this.scrollsX ? 'x' : this.scrollsX && !this.scrollsY ? 'y' : null;
+    if (cross === 'x') {
+      const x0 = Math.max(full.x, box.x + rel.x);
+      const x1 = Math.min(full.x + full.width, box.x + rel.x + rel.width);
+      if (x1 - x0 >= 20) return { ...full, x: x0, width: x1 - x0 };
+    } else if (cross === 'y') {
+      const y0 = Math.max(full.y, box.y + rel.y);
+      const y1 = Math.min(full.y + full.height, box.y + rel.y + rel.height);
+      if (y1 - y0 >= 20) return { ...full, y: y0, height: y1 - y0 };
+    }
+    return full;
   }
 
   private metrics() {
@@ -198,7 +219,7 @@ export class PageDriver {
     let best: HTMLElement | null = null;
     let bestArea = 0;
     for (const node of allElements(document)) {
-      if (node === document.documentElement || node === document.body) continue;
+      if (node === document.documentElement) continue;
       const ch = node.clientHeight;
       if (ch < 80 || node.clientWidth < 80 || node.scrollHeight - ch < 40) continue;
       if (!/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY)) continue;
@@ -294,7 +315,9 @@ export class PageDriver {
 
       if (spec.kind === 'element') {
         if (!picked) throw new SnapflowError('CAPTURE_FAILED', 'The chosen element is no longer available.');
-        this.scroller = isDocElement(picked) ? null : (picked as HTMLElement);
+        // <body> can be the real scroller on app-style pages (html{overflow:hidden}; body{overflow:auto}).
+        const docScrolls = se.scrollHeight - se.clientHeight > 1 || se.scrollWidth - se.clientWidth > 1;
+        this.scroller = isDocElement(picked) && docScrolls ? null : (picked as HTMLElement);
       } else if (spec.kind === 'region') {
         this.scroller = null;
       } else if (spec.direction === 'vertical' && se.scrollHeight - se.clientHeight <= 1) {

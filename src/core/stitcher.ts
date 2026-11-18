@@ -117,7 +117,19 @@ export class ImageStitchingService {
     return true;
   }
 
-  async finish(): Promise<Blob> {
-    return canvasToBlob(this.canvas, 'png');
+  /**
+   * Encode the result. With `extent` (full-resolution px) only the top-left part is kept – used when the
+   * capture was stopped early so the image contains exactly what was captured, not blank space.
+   */
+  async finish(extent?: { width: number; height: number }): Promise<{ blob: Blob; width: number; height: number }> {
+    const k = this.plan.scale;
+    const w = extent ? Math.max(1, Math.min(this.canvas.width, Math.round(extent.width * k))) : this.canvas.width;
+    const h = extent ? Math.max(1, Math.min(this.canvas.height, Math.round(extent.height * k))) : this.canvas.height;
+    if (w === this.canvas.width && h === this.canvas.height) {
+      return { blob: await canvasToBlob(this.canvas, 'png'), width: w, height: h };
+    }
+    const out = createCanvas(w, h);
+    get2d(out).drawImage(this.canvas, 0, 0, w, h, 0, 0, w, h);
+    return { blob: await canvasToBlob(out, 'png'), width: w, height: h };
   }
 }

@@ -9,6 +9,7 @@ const CSS =
     background: rgba(24, 26, 33, 0.94); color: #fff; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.35);
     border: 1px solid rgba(255,255,255,.12);
   }
+  kbd { margin-left: 4px; padding: 0 4px; border-radius: 4px; background: rgba(255,255,255,.22); font: 600 10px/1.5 ui-monospace, Consolas, monospace; }
   .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.3); border-top-color: #fff; animation: s 0.8s linear infinite; }
   @keyframes s { to { transform: rotate(360deg); } }
   .bar { width: 120px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.2); overflow: hidden; }
@@ -30,22 +31,31 @@ export class ProgressUi {
   private toastTimer: number | undefined;
   private toastLayer: Layer | null = null;
 
-  constructor(private readonly onCancel: () => void) {}
+  constructor(
+    private readonly onStop: () => void,
+    private readonly onDiscard: () => void,
+  ) {}
 
   show(text: string, fraction: number): void {
     if (!this.layer) {
       this.layer = createLayer(CSS);
       this.label = el('span');
       this.bar = el('i');
-      const cancel = el('button', { type: 'button', 'aria-label': 'Cancel capture' });
-      cancel.innerHTML = ICONS.x;
-      cancel.append(' Cancel');
-      cancel.addEventListener('click', () => this.onCancel());
+      const stop = el('button', { type: 'button', className: 'primary', 'aria-label': 'Stop and use what has been captured so far (Esc)' });
+      stop.innerHTML = ICONS.check;
+      stop.append(' Stop & use ');
+      stop.append(el('kbd', { text: 'Esc' }));
+      stop.addEventListener('click', () => this.onStop());
+      const discard = el('button', { type: 'button', 'aria-label': 'Discard this capture' });
+      discard.innerHTML = ICONS.x;
+      discard.append(' Discard');
+      discard.addEventListener('click', () => this.onDiscard());
       const pill = el('div', { className: 'pill', role: 'status' }, [
         el('span', { className: 'spin' }),
         this.label,
         el('span', { className: 'bar' }, [this.bar]),
-        cancel,
+        stop,
+        discard,
       ]);
       this.layer.root.appendChild(pill);
     }

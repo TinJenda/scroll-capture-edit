@@ -29,12 +29,17 @@ interface PendingScroll {
   target: FullPageTarget;
   element: Element | null;
   rect: Rect | null;
+  /** Selection relative to the container (narrows across the scroll axis). */
+  rel?: Rect | null;
 }
 
 const GLOBAL_KEY = '__snapflowAgent__';
 
 class Agent implements AgentHandle {
-  private progress = new ProgressUi(() => this.send({ type: 'EVT_CANCEL_FULLPAGE' }));
+  private progress = new ProgressUi(
+    () => this.send({ type: 'EVT_STOP_FULLPAGE' }),
+    () => this.send({ type: 'EVT_CANCEL_FULLPAGE' }),
+  );
   private driver = new PageDriver();
   private preview = new PreviewOverlay();
   private selector: AreaSelector | null = null;
@@ -79,8 +84,9 @@ class Agent implements AgentHandle {
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
     if (this.driver.isActive) {
+      // Esc while scrolling = stop here and keep what was captured so far.
       e.preventDefault();
-      this.send({ type: 'EVT_CANCEL_FULLPAGE' });
+      this.send({ type: 'EVT_STOP_FULLPAGE' });
     } else if (this.preview.isOpen && !this.selector && !this.picker) {
       this.preview.close();
     }
@@ -150,7 +156,7 @@ class Agent implements AgentHandle {
         this.scrollSelector = new ScrollAreaSelector({
           onDone: (choice) => {
             this.scrollSelector = null;
-            this.pending = { target: choice.target, element: choice.element, rect: choice.rect };
+            this.pending = { target: choice.target, element: choice.element, rect: choice.rect, rel: choice.rel };
             this.send({
               type: 'EVT_SCROLL_AREA_SELECTED',
               target: choice.target,
@@ -193,7 +199,7 @@ class Agent implements AgentHandle {
           spec = { kind: 'region', direction: cmd.direction, rect: pending.rect };
         } else if (cmd.target === 'picked') {
           element = pending?.element ?? null;
-          spec = { kind: 'element', direction: cmd.direction };
+          spec = { kind: 'element', direction: cmd.direction, rel: pending?.rel ?? null };
         } else {
           spec = { kind: 'document', direction: cmd.direction };
         }

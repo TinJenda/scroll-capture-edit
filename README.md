@@ -12,6 +12,9 @@ Optional pre-capture action → Capture → Preview → Copy or Edit → Copy / 
 * **Scrolling area** – select a scrollable table / modal / panel (**Auto detect**: containers under your selection are found,
   ranked and highlighted; if several match equally you must choose) or a rectangle of the page that stays fixed while the page
   scrolls through it (**Manual region**). Vertical, horizontal or both (2-D tile grid), stitched at exact scroll offsets.
+  The selection always defines what is captured: a region of the page is captured on its own (no sidebars/ads); inside a
+  container the capture is narrowed to the selection across the scroll direction. **Esc while capturing stops and keeps what
+  was captured so far** (the pill also has a Discard button).
   Keys in the overlay: `A`/`M` method · `V`/`H`/`B` direction · `1`–`9` pick a container · `Enter` start · `Esc` cancel.
 * **Preview** (small overlay on the page, not the editor): **Copy**, **Edit**, **Save**, **Close**. `Ctrl/Cmd+C` copies the real PNG.
 * **Editor** – rectangle, ellipse, arrow, line, text, pen, highlighter, smart sequential numbering (1, 2, 3 …), blur, pixelate,
@@ -50,7 +53,7 @@ press the reload icon on the extension card. The same zip is what you upload to 
 
 ## Tests
 
-* **Unit (Vitest, 90 tests)** – pixel-ratio maths, crop boundaries, scroll positions, stitching/overlap/last-frame cropping,
+* **Unit (Vitest, 101 tests)** – pixel-ratio maths, crop boundaries, scroll positions, stitching/overlap/last-frame cropping,
   output-size limits, scroll coordinates / 2-D tiles / target ranking and ambiguity, filenames, undo/redo, annotation serialization, marker numbering, message validation,
   storage policy, and "page is restored after cancel/failure".
 * **E2E (Playwright, real Chrome)** – the extension is loaded into Chrome via the DevTools protocol
@@ -63,7 +66,7 @@ because automated tests cannot click the toolbar icon that normally grants `acti
 
 ## Status & known limitations
 
-Verified end-to-end in Chrome 157 (40 Playwright tests): visible / area / element / full-page / scrolling-area capture, preview + clipboard, editor
+Verified end-to-end in Chrome 157 (48 Playwright tests): visible / area / element / full-page / scrolling-area capture, preview + clipboard, editor
 (rectangle, arrow, text, markers, blur, pixelate, crop, undo/redo), save as PNG/JPEG/WebP, return-to-preview without losing edits.
 
 Not yet covered by automated tests: ellipse / line / pen / highlighter styling details, annotation presets UI, options page,

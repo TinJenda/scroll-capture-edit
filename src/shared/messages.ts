@@ -24,7 +24,10 @@ export type AgentEvent =
   | { type: 'EVT_ELEMENT_PICKED'; rect: Rect; viewport: Size; dpr: number; fullContent: boolean }
   | { type: 'EVT_SCROLL_AREA_SELECTED'; target: FullPageTarget; direction: ScrollDirection; viewport: Size; dpr: number }
   | { type: 'EVT_CAPTURE_ABORT'; reason: 'cancelled' | 'error'; message?: string }
-  | { type: 'EVT_CANCEL_FULLPAGE' };
+  /** Discard the capture in progress. */
+  | { type: 'EVT_CANCEL_FULLPAGE' }
+  /** Stop scrolling now and keep what has been captured so far (Esc during a scrolling capture). */
+  | { type: 'EVT_STOP_FULLPAGE' };
 
 export type BackgroundMessage = PageRequest | AgentEvent;
 
@@ -201,6 +204,8 @@ export function parseAgentEvent(raw: unknown): AgentEvent | null {
         : null;
     case 'EVT_CANCEL_FULLPAGE':
       return { type: 'EVT_CANCEL_FULLPAGE' };
+    case 'EVT_STOP_FULLPAGE':
+      return { type: 'EVT_STOP_FULLPAGE' };
     default:
       return null;
   }

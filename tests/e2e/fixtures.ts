@@ -20,6 +20,10 @@ export interface Harness {
   /** An extension page kept open in the background; used to send messages as an extension page. */
   helper: Page;
   open(pathAndQuery: string): Promise<Page>;
+  /** Chrome tab id of a page. */
+  tabId(page: Page): Promise<number>;
+  /** Discard a capture in progress (what the "Discard" button in the progress pill does). */
+  discard(page: Page): Promise<void>;
   /** Start a capture on the page like the popup would. */
   capture(page: Page, mode: 'visible' | 'area' | 'fullPage' | 'scrollArea' | 'element'): Promise<void>;
   /** Wait for the in-page preview overlay iframe and return its frame. */
@@ -90,6 +94,11 @@ export const test = base.extend<{ env: Env; h: Harness }>({
         await page.goto(`${FIXTURE}${p}`);
         await page.bringToFront();
         return page;
+      },
+      tabId: (page) => tabIdFor(page),
+      async discard(page) {
+        const id = await tabIdFor(page);
+        await helper.evaluate(async (t) => chrome.runtime.sendMessage({ type: 'CANCEL_CAPTURE', tabId: t }), id);
       },
       async capture(page, mode) {
         await page.bringToFront();

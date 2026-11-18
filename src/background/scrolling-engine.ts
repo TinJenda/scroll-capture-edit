@@ -4,7 +4,7 @@ import { MAX_FRAMES, MAX_GROWTH_RETRIES } from '@/shared/constants';
 import { SnapflowError } from '@/shared/errors';
 import { resolveScale } from '@/shared/geometry';
 import type { FullPagePrepareResult, FullPageScrollResult, FullPageTarget } from '@/shared/messages';
-import { ScrollCoordinateManager } from '@/shared/scroll-coords';
+import { partialExtent, ScrollCoordinateManager } from '@/shared/scroll-coords';
 import { DEFAULT_LIMITS, planOutputSize } from '@/shared/stitch';
 import type { CaptureWarning, ScrollDirection, Size } from '@/shared/types';
 import { agentCall, agentTry } from './agent';
@@ -16,7 +16,10 @@ export interface ScrollCaptureOptions {
   target: FullPageTarget;
   direction: ScrollDirection;
   settleMs: number;
+  /** Discard everything. */
   isCancelled: () => boolean;
+  /** Stop scrolling now and keep what has been captured so far. */
+  shouldStop?: () => boolean;
   onProgress?: (frame: number, total: number) => void;
 }
 
@@ -86,9 +89,17 @@ export class ScrollingAreaCaptureEngine {
       let growthRetries = 0;
       let warnedGrowth = false;
       let hitFrameCap = false;
+      let stopped = false;
+      let rowStartCovered = 0;
+      let lastRow = 0;
+      let lastCol = 0;
 
       for (;;) {
         if (this.opts.isCancelled()) throw cancelled();
+        if (this.opts.shouldStop?.()) {
+          stopped = true;
+          break;
+        }
 
         this.opts.onProgress?.(frameIdx, coords.estimateFrames());
         const s = await agentCall<FullPageScrollResult>(tabId, {
@@ -100,6 +111,10 @@ export class ScrollingAreaCaptureEngine {
           settleMs,
         });
         if (this.opts.isCancelled()) throw cancelled();
+        if (this.opts.shouldStop?.()) {
+          stopped = true;
+          break;
+        }
 
         if (s.viewport.width !== prep.viewport.width || s.viewport.height !== prep.viewport.height) {
           throw new SnapflowError('VIEWPORT_CHANGED', 'The window was resized or zoomed during capture. Please try again without changing the window.');
@@ -164,7 +179,10 @@ export class ScrollingAreaCaptureEngine {
               }
               coords.updateMaxScroll('y', s.maxScrollTop);
             }
+            if (col === 0) rowStartCovered = stitcher.coveredHeight;
             tiles.addTile(bitmap, s.region, { left: s.scrollLeft, top: s.scrollTop }, col, row);
+            lastRow = row;
+            lastCol = col;
             frameIdx++;
           }
         } finally {
@@ -205,10 +223,34 @@ export class ScrollingAreaCaptureEngine {
         row++;
       }
 
-      if (!stitcher) throw new SnapflowError('CAPTURE_FAILED', 'No frames were captured.');
+      // Stopped before the first tile was stored: there is nothing to make an image from.
+      if (!stitcher || (stopped && stitcher.frames === 0)) {
+        throw stopped ? cancelled() : new SnapflowError('CAPTURE_FAILED', 'No frames were captured.');
+      }
       const plan = stitcher.currentPlan;
 
-      if (hitFrameCap) {
+      const extent = stopped
+        ? partialExtent({
+            scrollsX,
+            scrollsY,
+            coveredX: stitcher.coveredWidth,
+            coveredY: stitcher.coveredHeight,
+            rowStartCovered,
+            row: lastRow,
+            col: lastCol,
+            columns: tiles?.columns ?? 1,
+            fullWidth: plan.capturedFullWidth,
+            fullHeight: plan.capturedFullHeight,
+          })
+        : undefined;
+      const done = await stitcher.finish(extent);
+
+      if (stopped) {
+        warnings.push({
+          code: 'stopped',
+          message: `Capture was stopped early, so the image contains only the part captured so far (${done.width} × ${done.height} px).`,
+        });
+      } else if (hitFrameCap) {
         warnings.push({
           code: 'frames',
           message: `The area is extremely large, so capture stopped after ${MAX_FRAMES} screens. The rest is not included.`,
@@ -223,11 +265,10 @@ export class ScrollingAreaCaptureEngine {
         });
       }
 
-      const blob = await stitcher.finish();
       return {
-        blob,
-        width: plan.outWidth,
-        height: plan.outHeight,
+        blob: done.blob,
+        width: done.width,
+        height: done.height,
         scale: scale * plan.scale,
         viewport: prep.viewport,
         warnings,

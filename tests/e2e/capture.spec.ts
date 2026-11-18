@@ -181,14 +181,43 @@ test.describe('full page capture', () => {
     expect(bad).toEqual([]);
   });
 
-  test('cancelling mid-capture restores the page and stores nothing', async ({ h }) => {
-    const page = await h.open('/sticky.html?n=100');
+  test('Esc mid-capture stops and keeps what was captured so far; the page is restored', async ({ h }) => {
+    const page = await h.open('/sticky.html?n=60');
+    await page.evaluate(() => window.scrollTo(0, 450));
+    const s = (await pageInfo(page)).dpr;
+    await h.capture(page, 'fullPage');
+    await page.waitForTimeout(2400); // a few frames in
+    expect(await page.evaluate(() => window.scrollY)).not.toBe(450);
+    await page.keyboard.press('Escape');
+    await h.previewFrame(page); // the preview appears with the partial image
+
+    const meta = await h.latestCapture([]);
+    expect(meta.warnings.some((w) => w.code === 'stopped')).toBe(true);
+    expect(meta.height).toBeGreaterThan(700 * s); // more than the first screen …
+    expect(meta.height).toBeLessThan(0.5 * (60 + 60 * 200) * s); // … far less than the whole page
+    // what was captured is exact: sticky header once, then bands in order
+    const bands = Math.floor((meta.height / s - 60) / 200);
+    expect(bands).toBeGreaterThanOrEqual(3);
+    await expectBands(h, { count: bands, bandH: 200, scale: s, offset: 60 });
+    // no blank tail: the bottom row is real content
+    const edge = await h.latestCapture([[10, meta.height - 1], [meta.width - 1, meta.height - 1]]);
+    for (const px of edge.colors) expect(px[3]).toBe(255);
+
+    const after = await page.evaluate(() => ({
+      y: window.scrollY,
+      styles: document.querySelectorAll('style[data-snapflow-style]').length,
+      footer: getComputedStyle(document.getElementById('ftr') as HTMLElement).visibility,
+      header: getComputedStyle(document.getElementById('hdr') as HTMLElement).position,
+    }));
+    expect(after).toEqual({ y: 450, styles: 0, footer: 'visible', header: 'sticky' });
+  });
+
+  test('Discard mid-capture restores the page and stores nothing', async ({ h }) => {
+    const page = await h.open('/sticky.html?n=60');
     await page.evaluate(() => window.scrollTo(0, 450));
     await h.capture(page, 'fullPage');
-    await page.waitForTimeout(1600); // a few frames in
-    const during = await page.evaluate(() => window.scrollY);
-    expect(during).not.toBe(450);
-    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1600);
+    await h.discard(page);
     await page.waitForTimeout(1800);
     const state = await page.evaluate(() => ({
       y: window.scrollY,

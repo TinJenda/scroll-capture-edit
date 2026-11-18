@@ -72,15 +72,16 @@ test.describe('Scenario B – long modal with its own scrollbar', () => {
   });
 });
 
-test.describe('Scenario C – main article column of a page (manual region)', () => {
-  test('captures only the selected column, top to bottom of the selected rows, without sidebars', async ({ h }) => {
+test.describe('Scenario C – main article column of a page', () => {
+  for (const [how, keys] of [['Manual region (M)', ['m']], ['Auto detect (default – the page is the only candidate)', []]] as const) {
+  test(`${how}: captures only the selected column, not the whole page`, async ({ h }) => {
     const page = await h.open('/article.html');
     const info = await pageInfo(page);
     const s = info.dpr;
     const top = 120;
     const bottom = info.ch - 120;
 
-    await startScrollCapture(h, page, { from: [220, top], to: [820, bottom], keys: ['m'] });
+    await startScrollCapture(h, page, { from: [220, top], to: [820, bottom], keys: [...keys] });
     await h.previewFrame(page);
 
     // output row r  ⇄  document row top + r;  length = scrollHeight − top − (viewport − bottom)
@@ -114,6 +115,7 @@ test.describe('Scenario C – main article column of a page (manual region)', ()
       expect(near(c, [255, 153, 0], 6), `ad leaked: ${describeColor(c)}`).toBe(false);
     }
   });
+  }
 });
 
 test.describe('Scenario D – table wider than its container', () => {
@@ -143,6 +145,54 @@ test.describe('Scenario D – table wider than its container', () => {
     await h.previewFrame(page);
     const cap = await h.latestCapture([]);
     expect(cap.width).toBe(Math.round(4000 * s));
+  });
+});
+
+test.describe('The selection defines what is captured', () => {
+  test('a page region is never expanded to the whole page: sidebars, ads and the rest are absent', async ({ h }) => {
+    const page = await h.open('/article.html');
+    const info = await pageInfo(page);
+    const s = info.dpr;
+    await startScrollCapture(h, page, { from: [230, 20], to: [810, info.ch - 20] }); // Auto detect, nothing else pressed
+    await h.previewFrame(page);
+    const cap = await h.latestCapture([px(2, 400, s), px(575, 400, s)]);
+    // far narrower than the page (≈1247px) – exactly the selected column
+    expect(Math.abs(cap.width - 580 * s)).toBeLessThanOrEqual(2);
+    expect(cap.width).toBeLessThan(info.cw * s * 0.6);
+    for (const c of cap.colors) {
+      expect(near(c, [51, 51, 51], 6), 'left sidebar leaked').toBe(false);
+      expect(near(c, [255, 153, 0], 6), 'ad column leaked').toBe(false);
+    }
+  });
+
+  test('inside a scroll container the selection narrows the capture across the scroll direction (one column)', async ({ h }) => {
+    const page = await h.open('/scroll-table.html?n=60');
+    const s = (await pageInfo(page)).dpr;
+    await startScrollCapture(h, page, { from: [200, 110], to: [400, 490] }); // a 200px-wide slice of the 585px table
+    await h.previewFrame(page);
+    const cap = await expectBands(h, { count: 60, bandH: 30, scale: s, sampleX: 3 });
+    expect(Math.abs(cap.width - 200 * s)).toBeLessThanOrEqual(2);
+    expect(cap.height).toBe(Math.round(1800 * s)); // all rows, along the scroll direction
+  });
+
+  test('a drag that stops a few pixels short of the container edge still means the whole width', async ({ h }) => {
+    const page = await h.open('/scroll-table.html?n=60');
+    const s = (await pageInfo(page)).dpr;
+    const cw = await page.evaluate(() => (document.getElementById('table') as HTMLElement).clientWidth);
+    await startScrollCapture(h, page, { from: [47, 110], to: [620, 490] }); // 5px inside the left edge, 7px inside the right
+    await h.previewFrame(page);
+    const cap = await h.latestCapture([]);
+    expect(Math.abs(cap.width - cw * s)).toBeLessThanOrEqual(1);
+  });
+
+  test('pages that scroll inside <body> (html is overflow:hidden) are detected as a container', async ({ h }) => {
+    const page = await h.open('/body-scroll.html');
+    const s = (await pageInfo(page)).dpr;
+    await startScrollCapture(h, page, { from: [100, 100], to: [700, 500] });
+    await h.previewFrame(page);
+    const cap = await expectBands(h, { count: 30, bandH: 200, scale: s, sampleX: 3 });
+    expect(cap.height).toBe(Math.round(6000 * s));
+    expect(Math.abs(cap.width - 600 * s)).toBeLessThanOrEqual(2);
   });
 });
 
@@ -216,13 +266,62 @@ test.describe('Smart detection never guesses', () => {
 });
 
 test.describe('Cancellation and cleanup', () => {
-  test('Esc during the scroll restores the container and stores nothing', async ({ h }) => {
+  test('Esc during the scroll stops and makes the image from the rows captured so far', async ({ h }) => {
+    const page = await h.open('/scroll-table.html?start=500');
+    const sc = (await pageInfo(page)).dpr;
+    await startScrollCapture(h, page, { from: [50, 110], to: [640, 490] });
+    await page.waitForTimeout(2300); // a few frames in
+    expect(await page.evaluate(() => (document.getElementById('table') as HTMLElement).scrollTop)).not.toBe(500);
+    await page.keyboard.press('Escape');
+    await h.previewFrame(page);
+
+    const meta = await h.latestCapture([]);
+    expect(meta.warnings.some((w) => w.code === 'stopped')).toBe(true);
+    expect(meta.height).toBeGreaterThan(400 * sc);
+    expect(meta.height).toBeLessThan(6000 * sc * 0.5);
+    const rows = Math.floor(meta.height / sc / 30);
+    await expectBands(h, { count: rows, bandH: 30, scale: sc, sampleX: 5 });
+    const edge = await h.latestCapture([[5, meta.height - 1]]);
+    expect(edge.colors[0][3]).toBe(255); // no blank tail
+
+    const after = await page.evaluate(() => ({
+      top: (document.getElementById('table') as HTMLElement).scrollTop,
+      styles: document.querySelectorAll('style[data-snapflow-style]').length,
+    }));
+    expect(after).toEqual({ top: 500, styles: 0 });
+  });
+
+  test('Esc during a 2-D capture leaves a clean rectangle of correct tiles (no half-finished row)', async ({ h }) => {
+    const page = await h.open('/grid.html');
+    const sc = (await pageInfo(page)).dpr;
+    await startScrollCapture(h, page, { from: [50, 50], to: [430, 330], keys: ['b'] });
+    await page.waitForTimeout(3300); // several tiles in, not finished (9 tiles take ~6 s)
+    await page.keyboard.press('Escape');
+    await h.previewFrame(page);
+
+    const meta = await h.latestCapture([]);
+    expect(meta.warnings.some((w) => w.code === 'stopped')).toBe(true);
+    expect(meta.width * meta.height).toBeLessThan(1000 * sc * 1000 * sc);
+    const pts: Pt[] = [];
+    const want: number[][] = [];
+    for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) {
+      const [x, y] = px(c * 100 + 50, r * 100 + 50, sc);
+      if (x < meta.width && y < meta.height) { pts.push([x, y]); want.push([c * 25, r * 25, 128]); }
+    }
+    pts.push([meta.width - 1, meta.height - 1], [meta.width - 1, 0], [0, meta.height - 1]);
+    const cap = await h.latestCapture(pts);
+    expect(want.length).toBeGreaterThanOrEqual(4);
+    const bad = want.map((w, i) => (near(cap.colors[i], w, 2) ? '' : `cell #${i}: ${describeColor(cap.colors[i])}`)).filter(Boolean);
+    expect(bad, bad.join(', ')).toEqual([]);
+    for (const corner of cap.colors.slice(want.length)) expect(corner[3], 'corners are real content').toBe(255);
+    expect(await page.evaluate(() => { const g = document.getElementById('g') as HTMLElement; return [g.scrollLeft, g.scrollTop]; })).toEqual([0, 0]);
+  });
+
+  test('Discard during the scroll restores the container and stores nothing', async ({ h }) => {
     const page = await h.open('/scroll-table.html?start=500');
     await startScrollCapture(h, page, { from: [50, 110], to: [640, 490] });
-    await page.waitForTimeout(1500); // a few frames in
-    const during = await page.evaluate(() => (document.getElementById('table') as HTMLElement).scrollTop);
-    expect(during).not.toBe(500);
-    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1500);
+    await h.discard(page);
     await page.waitForTimeout(2000);
     const state = await page.evaluate(() => ({
       top: (document.getElementById('table') as HTMLElement).scrollTop,

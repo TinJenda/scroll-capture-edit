@@ -59,7 +59,8 @@ export class ScrollTargetDetector {
     const raw: Array<Omit<ScrollCandidate, 'score'>> = [];
 
     for (const el of allElements(document)) {
-      if (el === document.documentElement || el === document.body) continue;
+      // <html> is the document; <body> only counts when it is a scroll container of its own.
+      if (el === document.documentElement) continue;
       const cw = el.clientWidth;
       const ch = el.clientHeight;
       if (cw < 40 || ch < 40) continue;
@@ -107,7 +108,7 @@ export class ScrollTargetDetector {
         scrollHeight: se.scrollHeight,
         clientWidth: se.clientWidth,
         clientHeight: se.clientHeight,
-        label: 'Whole page',
+        label: 'The page (scrolls through your selection)',
       });
     }
 

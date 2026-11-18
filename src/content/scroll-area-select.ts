@@ -1,3 +1,4 @@
+import { snapSelection } from '@/shared/geometry';
 import type { FullPageTarget } from '@/shared/messages';
 import type { Rect, ScrollDirection } from '@/shared/types';
 import { AreaSelector } from './area-select';
@@ -9,8 +10,10 @@ export interface ScrollAreaChoice {
   direction: ScrollDirection;
   /** The scroll container (for target 'picked'). */
   element: HTMLElement | null;
-  /** The selection in viewport CSS px (the capture window for target 'region'). */
+  /** The capture window in viewport CSS px: the (snapped) selection for target 'region'. */
   rect: Rect;
+  /** For target 'picked': the selection relative to the container's client box (narrows across the scroll axis). */
+  rel: Rect | null;
 }
 
 type Mode = 'auto' | 'manual';
@@ -151,7 +154,7 @@ export class ScrollAreaSelector {
   private reason(): string | null {
     if (!this.sel) return 'Drag to select an area first.';
     if (this.mode === 'auto') {
-      if (!this.det.candidates.length) return 'No scrollable container found in this area. Select a different area, or use Manual region (M).';
+      if (!this.det.candidates.length) return 'No scrollable container found in this area (content inside an iframe cannot be detected). Select a different area, or use Manual region (M).';
       if (this.chosen === null) return 'More than one container matches. Choose the one you want: click it, or press its number.';
     }
     if (!this.allowed(this.direction)) {
@@ -285,15 +288,19 @@ export class ScrollAreaSelector {
   }
 
   private summary(): string {
+    if (!this.sel) return '';
+    const choice = this.resolve(this.sel);
+    if (!choice) return '';
     const dir = this.direction === 'both' ? 'both directions' : this.direction;
-    if (this.mode === 'manual' && this.sel) {
-      return `Target: the selected region (${Math.round(this.sel.width)}×${Math.round(this.sel.height)} px), fixed on screen while the page scrolls ${dir}.`;
+    if (choice.target === 'region') {
+      return `Target: only the selected part of the page (${Math.round(choice.rect.width)}×${Math.round(choice.rect.height)} px), captured as the page scrolls ${dir}. Nothing outside it is included.`;
     }
     const c = this.chosen !== null ? this.det.candidates[this.chosen] : null;
     if (!c) return '';
-    const w = Math.round(c.isDocument ? c.scrollWidth : c.horizontal && this.direction !== 'vertical' ? c.scrollWidth : c.clientWidth);
-    const h = Math.round(c.isDocument ? c.scrollHeight : c.vertical && this.direction !== 'horizontal' ? c.scrollHeight : c.clientHeight);
-    return `Target: ${c.label}. Direction: ${dir}. Result ≈ ${w.toLocaleString()} × ${h.toLocaleString()} px (CSS).`;
+    const w = Math.round(this.direction === 'vertical' ? choice.rect.width : c.scrollWidth);
+    const h = Math.round(this.direction === 'horizontal' ? choice.rect.height : c.scrollHeight);
+    const narrowed = choice.rel !== null && (Math.round(choice.rect.width) < Math.round(c.clientWidth) || Math.round(choice.rect.height) < Math.round(c.clientHeight));
+    return `Target: ${c.label}${narrowed ? ' (limited to your selection across the scroll direction)' : ''}. Direction: ${dir}. Result ≈ ${w.toLocaleString()} × ${h.toLocaleString()} px (CSS).`;
   }
 
   private renderHighlights(): void {
@@ -313,17 +320,42 @@ export class ScrollAreaSelector {
 
   /* ---------------- completion ---------------- */
 
-  private finish(rect: Rect): void {
-    if (this.mode === 'manual') {
-      this.cb.onDone({ target: 'region', direction: this.direction, element: null, rect });
-      return;
-    }
+  /**
+   * What exactly will be captured. The selection always defines the capture window:
+   *  - the page (or Manual region) → only the selected rectangle, as the page scrolls through it;
+   *  - a scroll container → its full scrollable content, narrowed to the selection across the scroll axis.
+   * Edges within a few pixels of the viewport / container edge snap onto it, so a slightly short drag still
+   * means "the whole width".
+   */
+  private resolve(sel: Rect): ScrollAreaChoice | null {
+    const root = document.scrollingElement ?? document.documentElement;
+    const viewport: Rect = { x: 0, y: 0, width: root.clientWidth || window.innerWidth, height: root.clientHeight || window.innerHeight };
+    const pageRegion = (): ScrollAreaChoice => ({
+      target: 'region',
+      direction: this.direction,
+      element: null,
+      rel: null,
+      rect: snapSelection(sel, viewport, { x: true, y: true }),
+    });
+
+    if (this.mode === 'manual') return pageRegion();
     const c: ScrollCandidate | undefined = this.chosen !== null ? this.det.candidates[this.chosen] : undefined;
-    if (!c) {
+    if (!c) return null;
+    if (c.isDocument) return pageRegion();
+
+    const cross = { x: this.direction === 'vertical', y: this.direction === 'horizontal' };
+    const rect = snapSelection(sel, c.rect, cross);
+    const rel = this.direction === 'both' ? null : { x: rect.x - c.rect.x, y: rect.y - c.rect.y, width: rect.width, height: rect.height };
+    return { target: 'picked', direction: this.direction, element: c.el, rect, rel };
+  }
+
+  private finish(rect: Rect): void {
+    const choice = this.resolve(rect);
+    if (!choice) {
       this.cb.onCancel();
       return;
     }
-    this.cb.onDone({ target: c.isDocument ? 'document' : 'picked', direction: this.direction, element: c.el, rect });
+    this.cb.onDone(choice);
   }
 
   destroy(): void {

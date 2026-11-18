@@ -21,7 +21,8 @@ export type WarningCode =
   | 'nested-scroll'
   | 'height-changed'
   | 'horizontal-overflow'
-  | 'frames';
+  | 'frames'
+  | 'stopped';
 
 export interface CaptureWarning {
   code: WarningCode;

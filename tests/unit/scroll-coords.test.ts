@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ScrollCoordinateManager, axisFrameCount, resolveAxes } from '@/shared/scroll-coords';
+import { ScrollCoordinateManager, axisFrameCount, partialExtent, resolveAxes } from '@/shared/scroll-coords';
 import { planStitch } from '@/shared/stitch';
 
 /** Simulate the engine's scroll loop along one axis; the browser clamps scroll to [0, maxScroll]. */
@@ -71,6 +71,37 @@ describe('ScrollCoordinateManager', () => {
     m.updateMaxScroll('y', 1500);
     m.updateMaxScroll('y', 900);
     expect(m.outputLength('y')).toBe(2000);
+  });
+});
+
+describe('stopping early keeps exactly what was captured', () => {
+  const base = { rowStartCovered: 0, row: 0, col: 0, columns: 1, fullWidth: 1000, fullHeight: 6000 };
+
+  it('vertical: the image is cropped to the rows covered so far, full width', () => {
+    expect(partialExtent({ ...base, scrollsX: false, scrollsY: true, coveredX: 0, coveredY: 1596 })).toEqual({ width: 1000, height: 1596 });
+  });
+
+  it('horizontal: cropped to the columns covered so far, full height', () => {
+    expect(partialExtent({ ...base, scrollsX: true, scrollsY: false, coveredX: 1196, coveredY: 0, fullWidth: 4000, fullHeight: 300, columns: 4, col: 1 })).toEqual({ width: 1196, height: 300 });
+  });
+
+  it('2-D, stopped inside the first row: only the tiles of that row', () => {
+    expect(partialExtent({ ...base, scrollsX: true, scrollsY: true, coveredX: 770, coveredY: 285, row: 0, col: 1, columns: 0 })).toEqual({ width: 770, height: 285 });
+  });
+
+  it('2-D, stopped in the middle of a later row: that unfinished row is left out (clean rectangle)', () => {
+    const r = partialExtent({ ...base, scrollsX: true, scrollsY: true, coveredX: 1000, coveredY: 855, rowStartCovered: 570, row: 2, col: 1, columns: 3 });
+    expect(r).toEqual({ width: 1000, height: 570 });
+  });
+
+  it('2-D, stopped exactly after finishing a row: that row is kept', () => {
+    const r = partialExtent({ ...base, scrollsX: true, scrollsY: true, coveredX: 1000, coveredY: 855, rowStartCovered: 570, row: 2, col: 2, columns: 3 });
+    expect(r).toEqual({ width: 1000, height: 855 });
+  });
+
+  it('never exceeds the planned size and is never empty', () => {
+    expect(partialExtent({ ...base, scrollsX: false, scrollsY: true, coveredX: 0, coveredY: 99999 }).height).toBe(6000);
+    expect(partialExtent({ ...base, scrollsX: false, scrollsY: true, coveredX: 0, coveredY: 0 }).height).toBe(1);
   });
 });
 

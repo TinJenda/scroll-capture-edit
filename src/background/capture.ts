@@ -22,7 +22,7 @@ interface Session {
 }
 
 const SESSIONS_KEY = 'snapflow:sessions';
-const running = new Map<number, { cancelled: boolean }>();
+const running = new Map<number, { cancelled: boolean; stopped: boolean }>();
 
 /* ------------------------------------------------------------------ */
 /* Session persistence (chrome.storage.session survives worker restarts) */
@@ -191,7 +191,7 @@ async function runScrolling(
   target: 'document' | 'picked' | 'region',
   direction: ScrollDirection = 'vertical',
 ): Promise<void> {
-  const run = running.get(session.tabId) ?? { cancelled: false };
+  const run = running.get(session.tabId) ?? { cancelled: false, stopped: false };
   running.set(session.tabId, run);
   const settings = await loadSettings();
   try {
@@ -202,6 +202,7 @@ async function runScrolling(
       direction,
       settleMs: settings.settleMs,
       isCancelled: () => run.cancelled,
+      shouldStop: () => run.stopped,
       onProgress: (frame, total) => void setBadge(session.tabId, `${Math.min(frame + 1, total)}/${total}`),
     });
     await finalize(session, result);
@@ -267,7 +268,7 @@ export async function startCapture(mode: CaptureMode, requestedTabId?: number): 
       await agentCall(tabId, { type: 'AGENT_PICK_ELEMENT' });
       break;
     case 'fullPage':
-      running.set(tabId, { cancelled: false });
+      running.set(tabId, { cancelled: false, stopped: false });
       void guarded(session, () => runScrolling(session, 'document'));
       break;
     case 'scrollArea':
@@ -306,7 +307,16 @@ export async function handleAgentEvent(evt: AgentEvent, tabId: number): Promise<
     case 'EVT_CANCEL_FULLPAGE':
       cancelCapture(tabId);
       return;
+    case 'EVT_STOP_FULLPAGE':
+      stopCapture(tabId);
+      return;
   }
+}
+
+/** Esc during a scrolling capture: stop scrolling and keep what has been captured so far. */
+export function stopCapture(tabId: number): void {
+  const run = running.get(tabId);
+  if (run) run.stopped = true;
 }
 
 export function cancelCapture(tabId: number): void {

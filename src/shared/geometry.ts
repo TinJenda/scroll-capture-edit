@@ -75,6 +75,28 @@ export function cssRectToImageRect(rect: Rect, scale: AxisScale, image: Size): R
   return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
 
+/**
+ * Clamp a selection to `bounds` and snap edges that are within `tol` px of a bound onto it (a drag that stops
+ * 3px short of a container's edge should still mean "the whole width"). Only the axes flagged in `axes`
+ * are narrowed; the other axes always span the full bounds.
+ */
+export function snapSelection(
+  sel: Rect,
+  bounds: Rect,
+  axes: { x: boolean; y: boolean },
+  tol = 12,
+): Rect {
+  const snap = (lo: number, hi: number, min: number, max: number): [number, number] => {
+    const a = Math.max(min, Math.min(lo, hi));
+    const b = Math.min(max, Math.max(lo, hi));
+    if (b - a < 20) return [min, max]; // degenerate → no narrowing
+    return [a - min <= tol ? min : a, max - b <= tol ? max : b];
+  };
+  const [x0, x1] = axes.x ? snap(sel.x, sel.x + sel.width, bounds.x, bounds.x + bounds.width) : [bounds.x, bounds.x + bounds.width];
+  const [y0, y1] = axes.y ? snap(sel.y, sel.y + sel.height, bounds.y, bounds.y + bounds.height) : [bounds.y, bounds.y + bounds.height];
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
 /** Rounds a size to integers, never below 1. */
 export function roundSize(width: number, height: number): Size {
   return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };

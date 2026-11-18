@@ -43,6 +43,35 @@ export function axisFrameCount(maxScroll: number, windowLen: number, overlap = F
   return Math.ceil(maxScroll / step) + 1;
 }
 
+export interface PartialState {
+  scrollsX: boolean;
+  scrollsY: boolean;
+  /** Full-resolution columns / rows covered so far. */
+  coveredX: number;
+  coveredY: number;
+  /** coveredY at the moment the current row started (2-D captures). */
+  rowStartCovered: number;
+  /** Row and column index of the last tile that was drawn, and how many columns a row has. */
+  row: number;
+  col: number;
+  columns: number;
+  /** The full planned output size, used for axes that are not scrolled. */
+  fullWidth: number;
+  fullHeight: number;
+}
+
+/**
+ * Size (full-resolution px) of the part of the stitched image that is complete when a capture is
+ * stopped early. A half-finished row of a 2-D grid is left out, so the result is always a clean rectangle.
+ */
+export function partialExtent(s: PartialState): { width: number; height: number } {
+  const width = s.scrollsX ? s.coveredX : s.fullWidth;
+  let height = s.scrollsY ? s.coveredY : s.fullHeight;
+  const rowComplete = !s.scrollsX || s.col + 1 >= s.columns;
+  if (s.scrollsX && s.scrollsY && s.row > 0 && !rowComplete) height = s.rowStartCovered;
+  return { width: Math.max(1, Math.min(width, s.fullWidth)), height: Math.max(1, Math.min(height, s.fullHeight)) };
+}
+
 export class ScrollCoordinateManager {
   constructor(
     private x: AxisSpec,

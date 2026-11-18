@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampRect, cssRectToImageRect, getCaptureScale, intersectRect, rectFromPoints, resolveScale } from '@/shared/geometry';
+import { clampRect, cssRectToImageRect, getCaptureScale, intersectRect, rectFromPoints, resolveScale, snapSelection } from '@/shared/geometry';
 
 describe('pixel ratio / scale', () => {
   it('uses devicePixelRatio when it agrees with the bitmap (avoids innerWidth rounding drift)', () => {
@@ -51,5 +51,33 @@ describe('rect helpers', () => {
     expect(intersectRect({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 10, height: 10 })).toEqual({ x: 5, y: 5, width: 5, height: 5 });
     expect(intersectRect({ x: 0, y: 0, width: 5, height: 5 }, { x: 5, y: 5, width: 5, height: 5 })).toBeNull();
     expect(clampRect({ x: -10, y: -10, width: 30, height: 30 }, { width: 15, height: 15 })).toEqual({ x: 0, y: 0, width: 15, height: 15 });
+  });
+});
+
+describe('selection snapping', () => {
+  const box = { x: 42, y: 100, width: 585, height: 400 };
+
+  it('snaps edges that stop a few pixels short of the container edge onto it', () => {
+    expect(snapSelection({ x: 47, y: 110, width: 573, height: 380 }, box, { x: true, y: false })).toEqual({ x: 42, y: 100, width: 585, height: 400 });
+  });
+
+  it('keeps a genuinely narrower selection (one column) and clamps what sticks out', () => {
+    expect(snapSelection({ x: 200, y: 110, width: 200, height: 380 }, box, { x: true, y: false })).toEqual({ x: 200, y: 100, width: 200, height: 400 });
+    expect(snapSelection({ x: 300, y: 110, width: 900, height: 380 }, box, { x: true, y: false })).toEqual({ x: 300, y: 100, width: 327, height: 400 });
+  });
+
+  it('axes that are not narrowed always span the full bounds', () => {
+    const r = snapSelection({ x: 100, y: 150, width: 50, height: 60 }, box, { x: false, y: false });
+    expect(r).toEqual(box);
+  });
+
+  it('narrows both axes for a page region, snapping each edge independently', () => {
+    const vp = { x: 0, y: 0, width: 1247, height: 704 };
+    expect(snapSelection({ x: 220, y: 120, width: 600, height: 464 }, vp, { x: true, y: true })).toEqual({ x: 220, y: 120, width: 600, height: 464 });
+    expect(snapSelection({ x: 3, y: 5, width: 1240, height: 698 }, vp, { x: true, y: true })).toEqual(vp);
+  });
+
+  it('a degenerate selection does not narrow anything', () => {
+    expect(snapSelection({ x: 100, y: 100, width: 5, height: 5 }, box, { x: true, y: true })).toEqual(box);
   });
 });
