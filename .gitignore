@@ -28,3 +28,5 @@ Thumbs.db
 
 # packaged extension zips
 release/
+dist-desktop/
+dist-desktop-e2e/

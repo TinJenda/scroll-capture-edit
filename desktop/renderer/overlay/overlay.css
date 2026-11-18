@@ -1,0 +1,88 @@
+html,
+body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+  font: 13px/1.4 system-ui, 'Segoe UI', sans-serif;
+}
+#shot {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  pointer-events: none;
+}
+#dim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+#sel {
+  position: fixed;
+  box-sizing: border-box;
+  border: 2px solid #6f88ff;
+  /* the selection "cuts a hole" in the dimming layer */
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45);
+  background: transparent;
+  pointer-events: none;
+}
+#sel.scrolling {
+  border-style: dashed;
+  border-color: #3ddc97;
+}
+#dims {
+  position: absolute;
+  left: -2px;
+  top: -26px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #1d2028;
+  color: #fff;
+  white-space: nowrap;
+  font-size: 12px;
+}
+#sel.near-top #dims {
+  top: auto;
+  bottom: -26px;
+}
+body.has-selection #dim {
+  display: none; /* the box-shadow of #sel does the dimming now */
+}
+#bar {
+  position: fixed;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: rgba(20, 22, 28, 0.92);
+  color: #eceef4;
+  pointer-events: none;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+#modeLabel {
+  font-weight: 600;
+}
+.keys {
+  color: #9aa1b2;
+}
+kbd {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #313644;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+body.dragging #bar {
+  opacity: 0;
+}

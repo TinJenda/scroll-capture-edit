@@ -53,13 +53,17 @@ press the reload icon on the extension card. The same zip is what you upload to 
 
 ## Tests
 
-* **Unit (Vitest, 101 tests)** – pixel-ratio maths, crop boundaries, scroll positions, stitching/overlap/last-frame cropping,
+* **Unit (Vitest, 124 tests)** – pixel-ratio maths, crop boundaries, scroll positions, stitching/overlap/last-frame cropping,
   output-size limits, scroll coordinates / 2-D tiles / target ranking and ambiguity, filenames, undo/redo, annotation serialization, marker numbering, message validation,
-  storage policy, and "page is restored after cancel/failure".
+  storage policy, and "page is restored after cancel/failure". The desktop app adds pixel-based shift measurement and the scroll/settle/stitch loop
+  (sticky bars, side panels, scrollbars, smooth scrolling, sparse content, repetitive content).
 * **E2E (Playwright, real Chrome)** – the extension is loaded into Chrome via the DevTools protocol
   (`Extensions.loadUnpacked`; branded Chrome ≥ 137 ignores `--load-extension`). Fixture pages cover long pages, sticky headers,
   fixed navigation, lazy images, nested scroll containers, dynamic height, very tall pages, hi-DPI and browser zoom. Assertions
   are pixel-exact (band order, exact seams, no duplicated headers) and the **real system clipboard is read back** after Copy.
+
+* **Desktop E2E (Playwright + Electron, 14 tests)** – real screen capture, real mouse wheel over a real window, Esc via the OS, the system
+  clipboard read back, save to disk, editor round trip; also runnable against the packaged `SnapFlow.exe` (`SNAPFLOW_EXE=…`).
 
 The E2E build (`dist-e2e/`) only differs from production by `host_permissions: <all_urls>` and `clipboardRead`/`tabs`,
 because automated tests cannot click the toolbar icon that normally grants `activeTab`.
@@ -77,6 +81,44 @@ as rendered; 2-D capture hides fixed elements except on the first and last tile;
 `overflow:hidden` + script cannot be auto-detected (pick them with Element capture); pages taller than the browser canvas limit are scaled down or cut with an explicit
 warning; Chrome's PDF viewer and `chrome://` pages cannot be scripted (visible-area capture still works on the PDF viewer).
 
+## Desktop app (Electron) – capture anything on the screen
+
+The extension can only see web pages. The desktop app (this branch, `desktop-app`) reuses the same preview, editor and
+export UI but captures **the whole screen**: any window, any application.
+
+| Shortcut | Mode |
+| --- | --- |
+| `Ctrl+Shift+1` | **Region** – drag a rectangle anywhere (every monitor) |
+| `Ctrl+Shift+2` | **Scrolling region** – drag over the area that scrolls |
+| `Ctrl+Shift+3` | **Full screen** – the display the mouse is on |
+| `Ctrl+Shift+4` | **Window** – pick one from the list |
+
+In the selection overlay press `R` (region) or `S` (scrolling) to switch mode, `Esc` or right-click to cancel. SnapFlow
+lives in the system tray; the launcher window has the same four buttons plus *Recent screenshots* and *Settings*.
+
+**Scrolling region.** SnapFlow does not know how far another application scrolled, so it *measures* it: it rolls the
+mouse wheel over the area, takes screenshots, finds how many pixels the content moved between two of them
+(`src/shared/overlap.ts`) and stitches the new rows. It ignores sticky headers/footers (kept once), fixed side panels,
+the scrollbar and hover highlights, waits for smooth-scrolling animations to finish, and stops at the end of the content.
+**Esc** (or *Stop & use* on the pill) stops and keeps what was captured so far; *Discard* throws it away. Keep the mouse
+still, and do not cover the area with another window while it runs.
+
+```powershell
+npm install                 # downloads Electron (if github.com is blocked: $env:ELECTRON_MIRROR='https://npmmirror.com/mirrors/electron/')
+npm run desktop             # build + start the app
+npm run desktop:pack        # portable Windows build: release/snapflow-desktop-<version>-win32-x64.zip (unzip, run SnapFlow.exe)
+npm run test:desktop        # real-Electron E2E suite – uses the real screen, mouse wheel and clipboard: do not touch the mouse
+```
+
+The packaged app is not code-signed, so Windows SmartScreen shows "unknown publisher" the first time (More info → Run anyway).
+
+Desktop limits (stated plainly): scrolling capture and window capture need **Windows** for now (mouse-wheel injection and window
+geometry use the Win32 API; the rest is cross-platform); vertical scrolling only; content that is mostly flat colour with
+little to anchor on is captured with smaller and smaller steps and, if it still cannot be lined up, ends with an explicit
+warning; a fixed side panel appears in every stitched tile; a window that is covered by another one cannot be captured.
+
 ## Permissions
 
-`activeTab`, `scripting`, `storage`, `downloads`, `clipboardWrite` – and **no host permissions**.
+`activeTab`, `scripting`, `storage`, `downloads`, `clipboardWrite` – and **no host permissions** (extension). The desktop app has
+no network access of its own: pages are served from the app bundle under a strict Content-Security-Policy and only the clipboard
+permission is granted.

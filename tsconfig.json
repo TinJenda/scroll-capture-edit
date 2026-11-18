@@ -21,6 +21,6 @@
       "@/*": ["src/*"]
     }
   },
-  "include": ["src", "tests", "scripts/*.mjs", "vitest.config.ts", "playwright.config.ts", "eslint.config.js"],
-  "exclude": ["node_modules", "dist", "dist-e2e"]
+  "include": ["src", "desktop", "tests", "scripts/*.mjs", "vitest.config.ts", "playwright.config.ts", "eslint.config.js"],
+  "exclude": ["node_modules", "dist", "dist-e2e", "dist-desktop", "dist-desktop-e2e"]
 }
